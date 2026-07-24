@@ -33,8 +33,6 @@ export interface ResolvedMinistakConfig {
   serverEntry: string
   outDir: string
   actionPath: string
-  bodyLimit?: number
-  spaFallback: boolean
 }
 
 export interface LoadedViteConfig {
@@ -124,8 +122,6 @@ export async function loadMinistakConfig(
     serverEntry,
     outDir,
     actionPath: resolveActionPath(config.actionPath),
-    bodyLimit: config.actions?.bodyLimit,
-    spaFallback: config.spaFallback ?? true,
   }
 }
 

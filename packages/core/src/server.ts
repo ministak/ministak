@@ -15,6 +15,7 @@ import type {
 import {
   DEV_ROUTE_MISS_HEADER,
   isSpaFallbackRequest,
+  type PageAppType,
 } from './routing.js'
 
 const actionStorage = new AsyncLocalStorage<ActionContext>()
@@ -106,7 +107,6 @@ function sendActionError(
 interface RegisterActionRouteOptions {
   actionPath: string
   actionRegistry: ActionRegistry
-  bodyLimit?: number
 }
 
 function registerActionRoute(
@@ -116,7 +116,6 @@ function registerActionRoute(
   app.post(
     options.actionPath,
     {
-      bodyLimit: options.bodyLimit ?? 1024 * 1024,
       errorHandler(error, request, reply) {
         sendActionError(error, request, reply)
       },
@@ -197,8 +196,7 @@ export interface CreateFrameworkAppOptions {
   development: boolean
   clientRoot?: string
   basePath?: string
-  bodyLimit?: number
-  spaFallback?: boolean
+  appType?: PageAppType
 }
 
 export async function createFrameworkApp(
@@ -232,7 +230,6 @@ export async function createFrameworkApp(
   registerActionRoute(app, {
     actionPath: options.actionPath,
     actionRegistry: options.actionRegistry,
-    bodyLimit: options.bodyLimit,
   })
 
   if (options.development) {
@@ -243,7 +240,7 @@ export async function createFrameworkApp(
       }
     })
     app.addHook('onSend', async (request, reply, payload) => {
-      if (routeMisses.has(request) && reply.statusCode === 404) {
+      if (routeMisses.has(request)) {
         reply.header(DEV_ROUTE_MISS_HEADER, '1')
       }
       return payload
@@ -265,7 +262,7 @@ export async function createFrameworkApp(
       prefix: basePath,
     })
   }
-  if (options.spaFallback !== false) {
+  if ((options.appType ?? 'spa') === 'spa') {
     try {
       app.setNotFoundHandler((request, reply) => {
         const pathname = new URL(request.url, 'http://localhost').pathname
@@ -284,7 +281,7 @@ export async function createFrameworkApp(
       })
     } catch (error) {
       throw new Error(
-        'spaFallback 与用户设置的 NotFoundHandler 冲突，请将 spaFallback 设为 false',
+        'Vite appType "spa" 与用户设置的 NotFoundHandler 冲突，请将 appType 设为 "mpa"',
         { cause: error },
       )
     }

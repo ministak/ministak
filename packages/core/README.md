@@ -100,6 +100,8 @@ export default app
 
 `app.register()`、`app.decorate()`、`app.setErrorHandler()` 等 API 均为 Fastify 原生行为。服务端入口只负责创建和配置实例，不调用 `app.listen()`；监听、关闭和开发热重启由 Ministak 管理。
 
+请求体大小等服务端设置直接使用 Fastify 实例选项，例如 `Fastify({ bodyLimit: 1024 })`。
+
 ## Action 请求上下文
 
 Action 内可以通过 `getActionContext()` 读取当前 Fastify 请求、响应、Action 名称和请求 ID：
@@ -130,6 +132,23 @@ import { ServerActionError } from 'ministak/client'
 - 框架配置：`ministak.config.*`
 - Vite 配置：`vite.config.*`
 - 服务端入口：`src/server.ts`，默认导出 Fastify 实例
+
+页面模式使用 Vite 原生 `appType`，默认值为 `spa`：
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+
+export default defineConfig({
+  appType: 'spa',
+})
+```
+
+- `spa`：页面地址未命中时返回 `index.html`。
+- `mpa`：只提供实际存在的页面，未命中返回 404。
+- `custom`：当前不支持，配置后会直接报错。
+
+项目根目录、构建输出目录和服务端构建入口由 Ministak 管理；Vite 配置显式设置冲突值时会直接提示，不会静默覆盖。
 
 ```bash
 pnpm dev

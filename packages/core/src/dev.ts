@@ -31,6 +31,8 @@ import type { ActionManifest } from './types.js'
 import {
   DEV_ROUTE_MISS_HEADER,
   isSpaFallbackRequest,
+  resolvePageAppType,
+  type PageAppType,
 } from './routing.js'
 import {
   createMinistakPlugin,
@@ -65,6 +67,78 @@ function basePathFromResolvedViteBase(base: string): string {
   return pathname.endsWith('/') ? pathname : `${pathname}/`
 }
 
+function validateUserViteConfig(
+  config: UserConfig,
+  target: 'client' | 'server',
+): void {
+  if (config.root !== undefined) {
+    throw new Error(
+      '项目根目录由 Ministak 管理，请不要在 Vite 配置中设置 root',
+    )
+  }
+
+  const build = config.build
+  if (build?.outDir !== undefined) {
+    throw new Error(
+      '构建输出目录由 Ministak 管理，请使用 ministak.config.* 的 outDir',
+    )
+  }
+  if (build?.emptyOutDir === false) {
+    throw new Error(
+      '构建输出目录必须由 Ministak 清理，请不要将 build.emptyOutDir 设为 false',
+    )
+  }
+
+  if (target === 'client') {
+    if (build?.ssr !== undefined) {
+      throw new Error('客户端构建由 Ministak 管理，请不要设置 build.ssr')
+    }
+    return
+  }
+
+  if (build?.ssr !== undefined && build.ssr !== true) {
+    throw new Error(
+      '服务端构建入口由 Ministak 管理，build.ssr 只能省略或设为 true',
+    )
+  }
+  if (build?.target !== undefined && build.target !== 'node24') {
+    throw new Error(
+      '服务端构建目标由 Ministak 管理，build.target 只能省略或设为 "node24"',
+    )
+  }
+  if (build?.rollupOptions?.input !== undefined) {
+    throw new Error(
+      '服务端构建入口由 Ministak 管理，请不要设置 build.rollupOptions.input',
+    )
+  }
+
+  const output = build?.rollupOptions?.output
+  if (Array.isArray(output)) {
+    throw new Error('服务端构建不支持 rollupOptions.output 数组配置')
+  }
+  if (output?.dir !== undefined || output?.file !== undefined) {
+    throw new Error(
+      '服务端输出目录由 Ministak 管理，请不要设置 rollupOptions.output.dir 或 file',
+    )
+  }
+  if (
+    output?.entryFileNames !== undefined &&
+    output.entryFileNames !== 'index.mjs'
+  ) {
+    throw new Error(
+      '服务端入口文件名由 Ministak 管理，entryFileNames 只能省略或设为 "index.mjs"',
+    )
+  }
+  if (
+    output?.chunkFileNames !== undefined &&
+    output.chunkFileNames !== 'chunks/[name]-[hash].mjs'
+  ) {
+    throw new Error(
+      '服务端分块文件名由 Ministak 管理，chunkFileNames 只能省略或使用 Ministak 默认值',
+    )
+  }
+}
+
 async function collectPluginOption(
   option: PluginOption,
   plugins: Plugin[],
@@ -91,11 +165,11 @@ async function createProjectPlugins(
   for (const option of config.plugins ?? []) {
     await collectPluginOption(option, userPlugins)
   }
+  if (userPlugins.some((plugin) => plugin.name === 'ministak')) {
+    throw new Error('Ministak Vite 插件由框架自动注册，请不要重复添加')
+  }
 
-  const plugins = [
-    frameworkPlugin,
-    ...userPlugins.filter((plugin) => plugin.name !== 'ministak'),
-  ]
+  const plugins = [frameworkPlugin, ...userPlugins]
   if (
     target === 'client' &&
     !plugins.some((plugin) => plugin.name === 'vite:vue')
@@ -162,11 +236,15 @@ async function buildClient(options: {
   actionPath: string
   outDir: string
   mode: string
-}): Promise<string> {
+}): Promise<{
+  basePath: string
+  appType: PageAppType
+}> {
   const loaded = await loadUserViteConfig(
     options.root,
     configEnvironment('build', options.mode, false),
   )
+  validateUserViteConfig(loaded.config, 'client')
   const frameworkPlugin = createMinistakPlugin({
     root: options.root,
     target: 'client',
@@ -179,10 +257,12 @@ async function buildClient(options: {
     'client',
   )
   let basePath = '/'
+  let appType: PageAppType = 'spa'
   plugins.push({
-    name: 'ministak-client-base',
+    name: 'ministak-client-config',
     configResolved(config) {
       basePath = basePathFromResolvedViteBase(config.base)
+      appType = resolvePageAppType(config.appType)
     },
   })
 
@@ -198,7 +278,7 @@ async function buildClient(options: {
       sourcemap: loaded.config.build?.sourcemap ?? false,
     },
   })
-  return basePath
+  return { basePath, appType }
 }
 
 async function buildServer(options: {
@@ -209,8 +289,7 @@ async function buildServer(options: {
   serverEntry: string
   outDir: string
   development: boolean
-  bodyLimit?: number
-  spaFallback: boolean
+  appType: PageAppType
   command: ConfigEnv['command']
   mode: string
 }): Promise<ServerBuildResult> {
@@ -218,6 +297,7 @@ async function buildServer(options: {
     options.root,
     configEnvironment(options.command, options.mode, true),
   )
+  validateUserViteConfig(loaded.config, 'server')
   const frameworkPlugin = createMinistakPlugin({
     root: options.root,
     target: 'server',
@@ -226,8 +306,7 @@ async function buildServer(options: {
     basePath: options.basePath,
     development: options.development,
     serverEntry: options.serverEntry,
-    bodyLimit: options.bodyLimit,
-    spaFallback: options.spaFallback,
+    appType: options.appType,
   })
   const plugins = await createProjectPlugins(
     loaded.config,
@@ -249,7 +328,9 @@ async function buildServer(options: {
       target: 'node24',
       outDir: options.outDir,
       emptyOutDir: true,
-      sourcemap: options.development ? 'inline' : false,
+      sourcemap:
+        loaded.config.build?.sourcemap ??
+        (options.development ? 'inline' : false),
       rollupOptions: {
         ...loaded.config.build?.rollupOptions,
         input: SERVER_ENTRY_MODULE_ID,
@@ -290,7 +371,7 @@ export async function buildApplication(
     configEnvironment('build', mode, false),
   )
   const transportKey = createTransportKey()
-  const basePath = await buildClient({
+  const client = await buildClient({
     root,
     transportKey,
     actionPath: frameworkConfig.actionPath,
@@ -301,12 +382,11 @@ export async function buildApplication(
     root,
     transportKey,
     actionPath: frameworkConfig.actionPath,
-    basePath,
+    basePath: client.basePath,
     serverEntry: frameworkConfig.serverEntry,
     outDir: path.join(frameworkConfig.outDir, 'server'),
     development: false,
-    bodyLimit: frameworkConfig.bodyLimit,
-    spaFallback: frameworkConfig.spaFallback,
+    appType: client.appType,
     command: 'build',
     mode,
   })
@@ -315,7 +395,7 @@ export async function buildApplication(
     manifest: server.manifest,
     outDir: frameworkConfig.outDir,
     actionPath: frameworkConfig.actionPath,
-    basePath,
+    basePath: client.basePath,
   }
 }
 
@@ -438,13 +518,13 @@ function sendBackendUnavailable(
 
 function createBackendProxyPlugin(
   getPort: () => number | undefined,
-  spaFallback: boolean,
 ): Plugin {
   return {
     name: 'ministak-backend-proxy',
     configureServer(server) {
       const routeMisses = new WeakMap<IncomingMessage, BackendRouteMiss>()
       const basePath = basePathFromResolvedViteBase(server.config.base)
+      const appType = resolvePageAppType(server.config.appType)
 
       server.middlewares.use((incoming, outgoing, next) => {
         const port = getPort()
@@ -534,7 +614,7 @@ function createBackendProxyPlugin(
               requestUrl.pathname === `${basePath}index.html`)
           if (
             indexRequest ||
-            (spaFallback &&
+            (appType === 'spa' &&
               isSpaFallbackRequest(
                 incoming.method,
                 incoming.headers.accept,
@@ -588,8 +668,10 @@ export async function createDevServer(
     root,
     configEnvironment('serve', mode, false),
   )
+  validateUserViteConfig(clientViteConfig.config, 'client')
   const transportKey = createTransportKey()
   const devRoot = path.join(root, '.ministak', 'dev')
+  let appType: PageAppType = 'spa'
   let generation = 0
   let backend: BackendProcess | undefined
   let serverModules = new Set<string>()
@@ -614,8 +696,7 @@ export async function createDevServer(
       serverEntry: frameworkConfig.serverEntry,
       outDir: outputDirectory,
       development: true,
-      bodyLimit: frameworkConfig.bodyLimit,
-      spaFallback: frameworkConfig.spaFallback,
+      appType,
       command: 'serve',
       mode,
     })
@@ -635,9 +716,6 @@ export async function createDevServer(
       await stopBackend(previous)
     }
   }
-
-  await rm(devRoot, { recursive: true, force: true })
-  await launchBackend()
 
   const clientPlugin = createMinistakPlugin({
     root,
@@ -672,12 +750,8 @@ export async function createDevServer(
     root,
     configFile: false,
     mode,
-    appType: 'spa',
     plugins: [
-      createBackendProxyPlugin(
-        () => backend?.port,
-        frameworkConfig.spaFallback,
-      ),
+      createBackendProxyPlugin(() => backend?.port),
       ...clientPlugins,
     ],
     server: {
@@ -692,6 +766,9 @@ export async function createDevServer(
       },
     },
   })
+  appType = resolvePageAppType(vite.config.appType)
+  await rm(devRoot, { recursive: true, force: true })
+  await launchBackend()
   await vite.listen()
 
   const watchServerFiles = () => {

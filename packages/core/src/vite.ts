@@ -5,6 +5,7 @@ import {
   createActionTransportId,
   scanServerActions,
 } from './action-scanner.js'
+import type { PageAppType } from './routing.js'
 import type { ActionDefinition, ActionManifest } from './types.js'
 
 export const ACTIONS_MODULE_ID = 'virtual:ministak/actions'
@@ -111,8 +112,7 @@ function createServerEntryModule(options: {
   actionPath: string
   basePath: string
   development: boolean
-  bodyLimit?: number
-  spaFallback: boolean
+  appType: PageAppType
 }): string {
   const serverEntryImport = rootImport(options.root, options.serverEntry)
   return `
@@ -135,8 +135,7 @@ export const app = await createFrameworkApp({
   actionRegistry,
   development,
   clientRoot,
-  bodyLimit: ${JSON.stringify(options.bodyLimit)},
-  spaFallback: ${JSON.stringify(options.spaFallback)},
+  appType: ${JSON.stringify(options.appType)},
 })
 
 let closing = false
@@ -184,8 +183,7 @@ export interface MinistakPluginOptions {
   basePath?: string
   development?: boolean
   serverEntry?: string
-  bodyLimit?: number
-  spaFallback?: boolean
+  appType?: PageAppType
 }
 
 export interface MinistakPluginApi {
@@ -328,8 +326,7 @@ export function createMinistakPlugin(
           actionPath: options.actionPath,
           basePath: options.basePath ?? '/',
           development: options.development ?? false,
-          bodyLimit: options.bodyLimit,
-          spaFallback: options.spaFallback ?? true,
+          appType: options.appType ?? 'spa',
         })
       }
 

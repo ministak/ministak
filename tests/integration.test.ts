@@ -386,6 +386,9 @@ describe('生产构建和 HTTP 调用', () => {
             '@shared': path.resolve(import.meta.dirname, 'src/shared.ts'),
           },
         },
+        build: {
+          sourcemap: true,
+        },
         plugins: [vue(), {
           name: 'integration-user-plugin',
           transform(code, id) {
@@ -418,6 +421,9 @@ describe('生产构建和 HTTP 调用', () => {
     expect(built.outDir).toBe(outputRoot)
     expect(built.actionPath).toBe('/rpc/actions')
     expect(built.basePath).toBe('/app/')
+    expect(
+      await readdir(path.join(outputRoot, 'server')),
+    ).toContain('index.mjs.map')
 
     const clientOutput = await readClientOutput(projectRoot, outputRoot)
     const transportId = await readBuiltTransportId(
@@ -456,6 +462,63 @@ describe('生产构建和 HTTP 调用', () => {
     })
     expect(action.response.status).toBe(200)
     expect(action.payload).toMatchObject({ ok: true })
+  })
+
+  test.each([
+    {
+      id: 'root',
+      name: '项目根目录',
+      config: "export default { root: 'src' }\n",
+      message: '项目根目录由 Ministak 管理',
+    },
+    {
+      id: 'out-dir',
+      name: '构建输出目录',
+      config: "export default { build: { outDir: 'build' } }\n",
+      message: '构建输出目录由 Ministak 管理',
+    },
+    {
+      id: 'plugin',
+      name: '重复框架插件',
+      config:
+        "export default { plugins: [{ name: 'ministak' }] }\n",
+      message: 'Ministak Vite 插件由框架自动注册',
+    },
+    {
+      id: 'server-input',
+      name: '服务端构建入口',
+      config:
+        "export default ({ isSsrBuild }) => isSsrBuild ? { build: { rollupOptions: { input: 'src/server.ts' } } } : {}\n",
+      message: '服务端构建入口由 Ministak 管理',
+    },
+    {
+      id: 'app-type',
+      name: 'custom 页面模式',
+      config: "export default { appType: 'custom' }\n",
+      message: 'Vite appType 仅支持 "spa" 和 "mpa"',
+    },
+  ])('明确拒绝冲突的 Vite 配置：$name', async ({ id, config, message }) => {
+    const projectRoot = path.join(
+      testProjectsRoot,
+      `vite-conflict-${id}`,
+    )
+    await mkdir(testProjectsRoot, { recursive: true })
+    await cp(exampleRoot, projectRoot, {
+      recursive: true,
+      filter: (source) =>
+        !source.includes(`${path.sep}node_modules`) &&
+        !source.includes(`${path.sep}dist`) &&
+        !source.includes(`${path.sep}.ministak`),
+    })
+    await writeFile(
+      path.join(projectRoot, 'vite.config.ts'),
+      config,
+      'utf8',
+    )
+
+    await expect(
+      buildApplication({ root: projectRoot }),
+    ).rejects.toThrow(message)
   })
 })
 
@@ -621,6 +684,70 @@ export default app`,
     await buildApplication({ root: projectRoot })
     const production = await startBuiltServer(projectRoot)
     await assertRoutes(production.url)
+  })
+
+  test('appType 为 mpa 时只提供实际页面并保留 Fastify 404', async () => {
+    const projectRoot = path.join(testProjectsRoot, 'mpa-routes')
+    await mkdir(testProjectsRoot, { recursive: true })
+    await cp(exampleRoot, projectRoot, {
+      recursive: true,
+      filter: (source) =>
+        !source.includes(`${path.sep}node_modules`) &&
+        !source.includes(`${path.sep}dist`) &&
+        !source.includes(`${path.sep}.ministak`),
+    })
+    await writeFile(
+      path.join(projectRoot, 'vite.config.ts'),
+      "export default { base: '/app/', appType: 'mpa' }\n",
+      'utf8',
+    )
+    const serverFile = path.join(projectRoot, 'src/server.ts')
+    const serverSource = await readFile(serverFile, 'utf8')
+    await writeFile(
+      serverFile,
+      serverSource.replace(
+        'export default app',
+        `app.get('/api/message', async () => ({ source: 'fastify' }))
+app.setNotFoundHandler((_request, reply) => {
+  return reply.code(418).send({ custom: true })
+})
+
+export default app`,
+      ),
+      'utf8',
+    )
+
+    const assertMpa = async (url: string) => {
+      const route = await fetch(`${url}/api/message`)
+      expect(route.status).toBe(200)
+      expect(await route.json()).toEqual({ source: 'fastify' })
+
+      const index = await fetch(`${url}/app/`, {
+        headers: { accept: 'text/html' },
+      })
+      expect(index.status).toBe(200)
+      expect(await index.text()).toContain('Ministak 示例')
+
+      const nested = await fetch(`${url}/app/users/1`, {
+        headers: { accept: 'text/html' },
+      })
+      expect(nested.status).toBe(418)
+      expect(await nested.json()).toEqual({ custom: true })
+    }
+
+    const development = await createDevServer({
+      root: projectRoot,
+      port: 0,
+    })
+    try {
+      await assertMpa(development.url)
+    } finally {
+      await development.close()
+    }
+
+    await buildApplication({ root: projectRoot })
+    const production = await startBuiltServer(projectRoot)
+    await assertMpa(production.url)
   })
 
   test('单端口转发请求，并在服务端源码变化后切换子进程', async () => {

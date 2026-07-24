@@ -39,7 +39,9 @@ async function createActionApp(options: {
   configure?: (app: FastifyInstance) => Promise<void> | void
   handler?: () => Promise<unknown>
 } = {}): Promise<FrameworkApp> {
-  const userApp = Fastify()
+  const userApp = Fastify({
+    bodyLimit: options.bodyLimit,
+  })
   await options.configure?.(userApp)
   const app = await createFrameworkApp({
     app: userApp,
@@ -51,7 +53,6 @@ async function createActionApp(options: {
       },
     },
     development: true,
-    bodyLimit: options.bodyLimit,
   })
   apps.push(app)
   return app
@@ -97,7 +98,7 @@ describe('Server Action Fastify 请求链路', () => {
     expect(internalNameRequest.body).not.toContain(actionName)
   })
 
-  test('统一处理内容解析、请求体限制和 Hook 错误', async () => {
+  test('统一处理内容解析、Fastify 请求体限制和 Hook 错误', async () => {
     const app = await createActionApp({
       bodyLimit: 64,
       configure(instance) {
@@ -250,7 +251,7 @@ describe('生产 SPA 静态服务', () => {
     expect(outside.statusCode).toBe(404)
   })
 
-  test('关闭 spaFallback 后保留用户的 NotFoundHandler', async () => {
+  test('appType 为 mpa 时保留用户的 NotFoundHandler', async () => {
     const clientRoot = await createClientRoot()
     const userApp = Fastify()
     userApp.setNotFoundHandler((_request, reply) =>
@@ -262,7 +263,7 @@ describe('生产 SPA 静态服务', () => {
       actionRegistry: {},
       development: false,
       clientRoot,
-      spaFallback: false,
+      appType: 'mpa',
     })
     apps.push(app)
 

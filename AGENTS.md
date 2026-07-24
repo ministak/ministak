@@ -44,8 +44,10 @@ Fastify Hook 可以通过 `request.serverAction?.name` 匹配 Action。Action �
 
 - 框架配置使用 `ministak.config.*`。
 - Vite 配置继续使用原生 `vite.config.*`。
+- 页面模式由 Vite `appType` 统一控制，支持 `spa` 和 `mpa`。
 - Fastify 实例由服务端入口直接创建并默认导出，入口不调用 `listen()`。
 - Fastify 实例选项、Hook、插件和路由使用原生 API。
+- 框架必须接管的 Vite 配置发生冲突时直接报错，不静默覆盖。
 
 开发模式由 Vite 主进程管理客户端 HMR、Fastify 请求转发和 Fastify 子进程。生产构建输出：
 
