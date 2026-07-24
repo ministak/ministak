@@ -143,6 +143,7 @@ describe('创建项目', () => {
 
     expect(packageJson.name).toBe('my-app')
     expect(packageJson.dependencies.ministak).toBe(await expectedCoreVersion())
+    expect(packageJson.dependencies['server-only']).toBe('0.0.1')
     await expect(
       readFile(path.join(created.root, '.gitignore'), 'utf8'),
     ).resolves.toContain('node_modules/')
@@ -207,6 +208,7 @@ describe('创建项目', () => {
       dependencies: Record<string, string>
     }
     expect(packageJson.dependencies.ministak).toBe(await expectedCoreVersion())
+    expect(packageJson.dependencies['server-only']).toBe('0.0.1')
     packageJson.dependencies.ministak = `file:${path.join(packs, coreTarball!).replaceAll('\\', '/')}`
     await writeFile(
       packageFile,
@@ -222,6 +224,16 @@ describe('创建项目', () => {
       ),
     ) as { name: string }
     expect(installedCore.name).toBe('ministak')
+    const installedServerOnly = JSON.parse(
+      await readFile(
+        path.join(projectRoot, 'node_modules/server-only/package.json'),
+        'utf8',
+      ),
+    ) as { name: string; version: string }
+    expect(installedServerOnly).toMatchObject({
+      name: 'server-only',
+      version: '0.0.1',
+    })
 
     await runPnpm(['typecheck'], projectRoot)
     await runPnpm(['build'], projectRoot)

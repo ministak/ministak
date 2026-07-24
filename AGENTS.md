@@ -85,10 +85,6 @@ dist/server  -> Fastify、Action 和服务端依赖
 │  │  ├─ template/                 独立项目基础模板
 │  │  ├─ package.json             创建器包定义
 │  │  └─ tsup.config.ts           创建器构建配置
-│  └─ server-only/
-│     ├─ index.js                 运行时保护入口
-│     ├─ index.d.ts               类型入口
-│     └─ package.json             标记包定义
 ├─ examples/basic/
 │  ├─ src/
 │  │  ├─ App.vue                  登录与计数器示例页面
