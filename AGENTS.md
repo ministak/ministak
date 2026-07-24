@@ -47,7 +47,7 @@ Fastify Hook 可以通过 `request.serverAction?.name` 匹配 Action。Action �
 - Fastify 实例由服务端入口直接创建并默认导出，入口不调用 `listen()`。
 - Fastify 实例选项、Hook、插件和路由使用原生 API。
 
-开发模式由 Vite 主进程管理客户端 HMR、Action 代理和 Fastify 子进程。生产构建输出：
+开发模式由 Vite 主进程管理客户端 HMR、Fastify 请求转发和 Fastify 子进程。生产构建输出：
 
 ```text
 dist/client  -> Vue SPA 静态资源
@@ -70,6 +70,7 @@ dist/server  -> Fastify、Action 和服务端依赖
 │  │  │  ├─ action-scanner.ts     Action 扫描与校验
 │  │  │  ├─ client.ts             浏览器 RPC 客户端
 │  │  │  ├─ server.ts             Fastify 服务端运行时
+│  │  │  ├─ routing.ts            开发与生产共享的请求路由规则
 │  │  │  ├─ vite.ts               Vite 转换与代码边界
 │  │  │  ├─ dev.ts                构建、开发服务与生产启动
 │  │  │  └─ cli.ts                命令行入口

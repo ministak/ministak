@@ -512,7 +512,118 @@ describe('开发服务器热更新', () => {
     expect(Object.keys(metadata.optimized)).toContain('vue')
   })
 
-  test('单端口代理 Action，并在服务端源码变化后切换子进程', async () => {
+  test('开发和生产使用相同的 Fastify 优先路由顺序', async () => {
+    const projectRoot = path.join(testProjectsRoot, 'fastify-routes')
+    await mkdir(testProjectsRoot, { recursive: true })
+    await cp(exampleRoot, projectRoot, {
+      recursive: true,
+      filter: (source) =>
+        !source.includes(`${path.sep}node_modules`) &&
+        !source.includes(`${path.sep}dist`) &&
+        !source.includes(`${path.sep}.ministak`),
+    })
+    await writeFile(
+      path.join(projectRoot, 'vite.config.ts'),
+      "export default { base: '/app/' }\n",
+      'utf8',
+    )
+    const serverFile = path.join(projectRoot, 'src/server.ts')
+    const serverSource = await readFile(serverFile, 'utf8')
+    await writeFile(
+      serverFile,
+      serverSource.replace(
+        'export default app',
+        `app.addHook('preHandler', async (request, reply) => {
+  if (request.url === '/app/blocked') {
+    return reply.code(404).send({ blocked: true })
+  }
+})
+app.get('/api/message', async () => ({ source: 'fastify' }))
+app.post('/api/echo', async (request) => request.body)
+app.get('/app/api/not-found', async (_request, reply) => {
+  return reply.code(404).send({ source: 'fastify-route' })
+})
+
+export default app`,
+      ),
+      'utf8',
+    )
+
+    const assertRoutes = async (url: string) => {
+      const route = await fetch(`${url}/api/message`)
+      expect(route.status).toBe(200)
+      expect(await route.json()).toEqual({ source: 'fastify' })
+
+      const echo = await fetch(`${url}/api/echo`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: 'hello' }),
+      })
+      expect(echo.status).toBe(200)
+      expect(await echo.json()).toEqual({ message: 'hello' })
+
+      const routeNotFound = await fetch(`${url}/app/api/not-found`)
+      expect(routeNotFound.status).toBe(404)
+      expect(await routeNotFound.json()).toEqual({
+        source: 'fastify-route',
+      })
+      expect(
+        routeNotFound.headers.get('x-ministak-route-miss'),
+      ).toBeNull()
+
+      const blocked = await fetch(`${url}/app/blocked`, {
+        headers: { accept: 'text/html' },
+      })
+      expect(blocked.status).toBe(404)
+      expect(await blocked.json()).toEqual({ blocked: true })
+
+      const page = await fetch(`${url}/app/users/1`, {
+        headers: { accept: 'text/html' },
+      })
+      expect(page.status).toBe(200)
+      expect(await page.text()).toContain('Ministak 示例')
+
+      const index = await fetch(`${url}/app/`, {
+        headers: { accept: 'application/json' },
+      })
+      expect(index.status).toBe(200)
+      expect(await index.text()).toContain('Ministak 示例')
+
+      const baseRoot = await fetch(`${url}/app`, {
+        headers: { accept: 'text/html' },
+      })
+      expect(baseRoot.status).toBe(200)
+      expect(await baseRoot.text()).toContain('Ministak 示例')
+
+      const unknownApi = await fetch(`${url}/app/api/missing`, {
+        headers: { accept: 'application/json' },
+      })
+      expect(unknownApi.status).toBe(404)
+      expect(await unknownApi.json()).toEqual({ error: 'Not Found' })
+
+      const outsideBase = await fetch(`${url}/users/1`, {
+        headers: { accept: 'text/html' },
+      })
+      expect(outsideBase.status).toBe(404)
+      expect(await outsideBase.json()).toEqual({ error: 'Not Found' })
+    }
+
+    const development = await createDevServer({
+      root: projectRoot,
+      port: 0,
+    })
+    try {
+      await assertRoutes(development.url)
+    } finally {
+      await development.close()
+    }
+
+    await buildApplication({ root: projectRoot })
+    const production = await startBuiltServer(projectRoot)
+    await assertRoutes(production.url)
+  })
+
+  test('单端口转发请求，并在服务端源码变化后切换子进程', async () => {
     const projectRoot = path.join(testProjectsRoot, 'basic')
     await mkdir(testProjectsRoot, { recursive: true })
     await cp(exampleRoot, projectRoot, {
@@ -526,7 +637,9 @@ describe('开发服务器热更新', () => {
 
     const server = await createDevServer({ root: projectRoot, port: 0 })
     try {
-      const page = await fetch(server.url)
+      const page = await fetch(server.url, {
+        headers: { accept: 'text/html' },
+      })
       expect(page.status).toBe(200)
       expect(await page.text()).toContain('/src/main.ts')
 

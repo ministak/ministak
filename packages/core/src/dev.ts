@@ -1,7 +1,12 @@
 import { fork, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { request as httpRequest } from 'node:http'
+import {
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http'
 import { readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -23,6 +28,10 @@ import {
   PROJECT_CONFIG_FILES,
 } from './config-loader.js'
 import type { ActionManifest } from './types.js'
+import {
+  DEV_ROUTE_MISS_HEADER,
+  isSpaFallbackRequest,
+} from './routing.js'
 import {
   createMinistakPlugin,
   SERVER_ENTRY_MODULE_ID,
@@ -378,36 +387,74 @@ async function stopBackend(backend: BackendProcess): Promise<void> {
   await rm(backend.outputDirectory, { recursive: true, force: true })
 }
 
-function createActionProxyPlugin(
-  actionPath: string,
+interface BackendRouteMiss {
+  statusCode: number
+  statusMessage?: string
+  headers: IncomingHttpHeaders
+  body: Buffer
+  url: string
+}
+
+function copyBackendResponse(
+  outgoing: ServerResponse,
+  response: {
+    statusCode?: number
+    statusMessage?: string
+    headers: IncomingHttpHeaders
+  },
+): void {
+  outgoing.statusCode = response.statusCode ?? 502
+  if (response.statusMessage) {
+    outgoing.statusMessage = response.statusMessage
+  }
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (name !== DEV_ROUTE_MISS_HEADER && value !== undefined) {
+      outgoing.setHeader(name, value)
+    }
+  }
+}
+
+function sendBackendUnavailable(
+  outgoing: ServerResponse,
+  statusCode: number,
+): void {
+  if (outgoing.writableEnded) {
+    return
+  }
+  if (!outgoing.headersSent) {
+    outgoing.statusCode = statusCode
+    outgoing.setHeader('content-type', 'application/json; charset=utf-8')
+  }
+  outgoing.end(
+    JSON.stringify({
+      ok: false,
+      error: {
+        code: 'SERVER_UNAVAILABLE',
+        message: '服务端暂时不可用',
+      },
+    }),
+  )
+}
+
+function createBackendProxyPlugin(
   getPort: () => number | undefined,
+  spaFallback: boolean,
 ): Plugin {
   return {
-    name: 'ministak-action-proxy',
+    name: 'ministak-backend-proxy',
     configureServer(server) {
-      server.middlewares.use((incoming, outgoing, next) => {
-        const requestUrl = new URL(incoming.url ?? '/', 'http://localhost')
-        if (requestUrl.pathname !== actionPath) {
-          next()
-          return
-        }
+      const routeMisses = new WeakMap<IncomingMessage, BackendRouteMiss>()
+      const basePath = basePathFromResolvedViteBase(server.config.base)
 
+      server.middlewares.use((incoming, outgoing, next) => {
         const port = getPort()
         if (!port) {
-          outgoing.statusCode = 503
-          outgoing.setHeader('content-type', 'application/json; charset=utf-8')
-          outgoing.end(
-            JSON.stringify({
-              ok: false,
-              error: {
-                code: 'SERVER_UNAVAILABLE',
-                message: '服务端暂时不可用',
-              },
-            }),
-          )
+          sendBackendUnavailable(outgoing, 503)
           return
         }
 
+        const originalUrl = incoming.url ?? '/'
+        const requestUrl = new URL(originalUrl, 'http://localhost')
         const originalHost = incoming.headers.host
         const proxy = httpRequest(
           {
@@ -421,37 +468,91 @@ function createActionProxyPlugin(
             },
           },
           (response) => {
-            outgoing.statusCode = response.statusCode ?? 502
-            for (const [name, value] of Object.entries(response.headers)) {
-              if (value !== undefined) {
-                outgoing.setHeader(name, value)
-              }
+            const routeMiss =
+              response.headers[DEV_ROUTE_MISS_HEADER] === '1'
+            const insideBase =
+              basePath === '/' ||
+              requestUrl.pathname === basePath.slice(0, -1) ||
+              requestUrl.pathname.startsWith(basePath)
+
+            if (!routeMiss || !insideBase) {
+              copyBackendResponse(outgoing, response)
+              response.pipe(outgoing)
+              return
             }
-            response.pipe(outgoing)
+
+            const chunks: Buffer[] = []
+            response.on('data', (chunk: Buffer) => {
+              chunks.push(chunk)
+            })
+            response.on('error', (error) => {
+              server.config.logger.error(error.message)
+              sendBackendUnavailable(outgoing, 502)
+            })
+            response.on('end', () => {
+              if (outgoing.writableEnded) {
+                return
+              }
+              routeMisses.set(incoming, {
+                statusCode: response.statusCode ?? 404,
+                statusMessage: response.statusMessage,
+                headers: response.headers,
+                body: Buffer.concat(chunks),
+                url: originalUrl,
+              })
+              if (
+                basePath !== '/' &&
+                requestUrl.pathname === basePath.slice(0, -1)
+              ) {
+                incoming.url = `${basePath}${requestUrl.search}`
+              }
+              next()
+            })
           },
         )
 
         proxy.on('error', (error) => {
           server.config.logger.error(error.message)
-          if (!outgoing.headersSent) {
-            outgoing.statusCode = 502
-            outgoing.setHeader(
-              'content-type',
-              'application/json; charset=utf-8',
-            )
-          }
-          outgoing.end(
-            JSON.stringify({
-              ok: false,
-              error: {
-                code: 'SERVER_UNAVAILABLE',
-                message: '服务端暂时不可用',
-              },
-            }),
-          )
+          sendBackendUnavailable(outgoing, 502)
         })
         incoming.pipe(proxy)
       })
+
+      return () => {
+        server.middlewares.use((incoming, outgoing, next) => {
+          const routeMiss = routeMisses.get(incoming)
+          if (!routeMiss) {
+            next()
+            return
+          }
+          routeMisses.delete(incoming)
+
+          const requestUrl = new URL(routeMiss.url, 'http://localhost')
+          const indexRequest =
+            (incoming.method === 'GET' || incoming.method === 'HEAD') &&
+            (requestUrl.pathname === basePath ||
+              requestUrl.pathname === `${basePath}index.html`)
+          if (
+            indexRequest ||
+            (spaFallback &&
+              isSpaFallbackRequest(
+                incoming.method,
+                incoming.headers.accept,
+                requestUrl.pathname,
+                basePath,
+              ))
+          ) {
+            if (indexRequest && !incoming.url?.startsWith('/index.html')) {
+              incoming.url = `/index.html${requestUrl.search}`
+            }
+            next()
+            return
+          }
+
+          copyBackendResponse(outgoing, routeMiss)
+          outgoing.end(routeMiss.body)
+        })
+      }
     },
   }
 }
@@ -571,10 +672,11 @@ export async function createDevServer(
     root,
     configFile: false,
     mode,
+    appType: 'spa',
     plugins: [
-      createActionProxyPlugin(
-        frameworkConfig.actionPath,
+      createBackendProxyPlugin(
         () => backend?.port,
+        frameworkConfig.spaFallback,
       ),
       ...clientPlugins,
     ],
@@ -741,10 +843,11 @@ export async function createDevServer(
       closed = true
       clearTimeout(reloadTimer)
       await reloadQueue
-      await vite.close()
+      await vite.environments.client.waitForRequestsIdle()
       if (backend) {
         await stopBackend(backend)
       }
+      await vite.close()
       await rm(devRoot, { recursive: true, force: true })
     },
   }

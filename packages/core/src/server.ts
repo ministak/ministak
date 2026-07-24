@@ -12,6 +12,10 @@ import type {
   ActionRegistry,
   RpcFailure,
 } from './types.js'
+import {
+  DEV_ROUTE_MISS_HEADER,
+  isSpaFallbackRequest,
+} from './routing.js'
 
 const actionStorage = new AsyncLocalStorage<ActionContext>()
 
@@ -231,39 +235,58 @@ export async function createFrameworkApp(
     bodyLimit: options.bodyLimit,
   })
 
+  if (options.development) {
+    const routeMisses = new WeakSet<FastifyRequest>()
+    app.addHook('preHandler', async (request) => {
+      if (request.is404) {
+        routeMisses.add(request)
+      }
+    })
+    app.addHook('onSend', async (request, reply, payload) => {
+      if (routeMisses.has(request) && reply.statusCode === 404) {
+        reply.header(DEV_ROUTE_MISS_HEADER, '1')
+      }
+      return payload
+    })
+  }
+
+  let indexHtml: string | undefined
+  const basePath = options.basePath ?? '/'
   if (!options.development) {
     if (!options.clientRoot) {
       throw new Error('生产服务缺少客户端产物目录')
     }
-    const indexHtml = await readFile(
+    indexHtml = await readFile(
       path.join(options.clientRoot, 'index.html'),
       'utf8',
     )
-    const basePath = options.basePath ?? '/'
     await app.register(fastifyStatic, {
       root: options.clientRoot,
       prefix: basePath,
     })
-    if (options.spaFallback !== false) {
-      try {
-        app.setNotFoundHandler((request, reply) => {
-          const pathname = new URL(request.url, 'http://localhost').pathname
-          const insideBase =
-            basePath === '/' ||
-            pathname === basePath.slice(0, -1) ||
-            pathname.startsWith(basePath)
-          const acceptsHtml = request.headers.accept?.includes('text/html')
-          if (request.method === 'GET' && acceptsHtml && insideBase) {
-            return reply.type('text/html; charset=utf-8').send(indexHtml)
-          }
-          return reply.code(404).send({ error: 'Not Found' })
-        })
-      } catch (error) {
-        throw new Error(
-          'spaFallback 与用户设置的 NotFoundHandler 冲突，请将 spaFallback 设为 false',
-          { cause: error },
-        )
-      }
+  }
+  if (options.spaFallback !== false) {
+    try {
+      app.setNotFoundHandler((request, reply) => {
+        const pathname = new URL(request.url, 'http://localhost').pathname
+        if (
+          indexHtml !== undefined &&
+          isSpaFallbackRequest(
+            request.method,
+            request.headers.accept,
+            pathname,
+            basePath,
+          )
+        ) {
+          return reply.type('text/html; charset=utf-8').send(indexHtml)
+        }
+        return reply.code(404).send({ error: 'Not Found' })
+      })
+    } catch (error) {
+      throw new Error(
+        'spaFallback 与用户设置的 NotFoundHandler 冲突，请将 spaFallback 设为 false',
+        { cause: error },
+      )
     }
   }
 
