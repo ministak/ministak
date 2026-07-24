@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "allowArbitraryExtensions": true,
+    "types": ["node", "vitest/globals", "vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "ministak": ["packages/core/src/index.ts"],
+      "ministak/client": ["packages/core/src/client.ts"],
+      "ministak/server": ["packages/core/src/server.ts"],
+      "ministak/vite": ["packages/core/src/vite.ts"],
+      "ministak/dev": ["packages/core/src/dev.ts"]
+    }
+  },
+  "include": [
+    "packages/**/*.ts",
+    "examples/**/*.ts",
+    "examples/**/*.vue",
+    "tests/**/*.ts",
+    "tests/**/*.vue",
+    "vitest.config.ts"
+  ]
+}

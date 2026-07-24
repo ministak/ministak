@@ -1,0 +1,30 @@
+{
+  "name": "create-ministak",
+  "version": "0.1.0",
+  "description": "创建 Ministak 项目",
+  "license": "MIT",
+  "author": "Ministak",
+  "type": "module",
+  "files": [
+    "dist",
+    "template",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "create-ministak": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3"
+  }
+}
