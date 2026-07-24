@@ -18,7 +18,7 @@
     "access": "public"
   },
   "bin": {
-    "create-ministak": "./dist/cli.js"
+    "create-ministak": "dist/cli.js"
   },
   "scripts": {
     "build": "tsup"
