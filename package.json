@@ -8,6 +8,7 @@
     "build:core": "pnpm --filter ministak build",
     "build:packages": "pnpm --filter ministak build && pnpm --filter create-ministak build",
     "dev": "tsx packages/core/src/cli.ts dev examples/basic",
+    "inspect": "tsx packages/core/src/cli.ts inspect examples/basic",
     "start": "node examples/basic/dist/server/index.mjs",
     "test": "pnpm build:packages && vitest run",
     "test:watch": "pnpm build:packages && vitest",

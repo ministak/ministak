@@ -15,6 +15,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 import {
   buildApplication,
   createDevServer,
+  inspectApplication,
 } from '../packages/core/src/dev.js'
 import type { RpcResponse } from '../packages/core/src/types.js'
 import { createMinistakPlugin } from '../packages/core/src/vite.js'
@@ -348,6 +349,52 @@ describe('生产构建和 HTTP 调用', () => {
     await expect(
       buildApplication({ root: projectRoot }),
     ).rejects.toThrow('客户端代码不能导入服务端模块')
+    await expect(
+      inspectApplication({ root: projectRoot }),
+    ).rejects.toThrow('客户端代码不能导入服务端模块')
+  })
+
+  test('检查真实构建文件边界且不写入产物', async () => {
+    const projectRoot = path.join(testProjectsRoot, 'inspect-files')
+    await mkdir(testProjectsRoot, { recursive: true })
+    await cp(exampleRoot, projectRoot, {
+      recursive: true,
+      filter: (source) =>
+        !source.includes(`${path.sep}node_modules`) &&
+        !source.includes(`${path.sep}dist`) &&
+        !source.includes(`${path.sep}.ministak`),
+    })
+    await mkdir(path.join(projectRoot, 'public'))
+    await writeFile(
+      path.join(projectRoot, 'public/robots.txt'),
+      'User-agent: *\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, 'vite.config.ts'),
+      "export default { build: { sourcemap: true } }\n",
+      'utf8',
+    )
+
+    const report = await inspectApplication({ root: projectRoot })
+    const serverStart = report.indexOf('\n服务端\n')
+    expect(serverStart).toBeGreaterThan(0)
+    const clientReport = report.slice(0, serverStart)
+    const serverReport = report.slice(serverStart)
+
+    expect(clientReport).toContain('客户端（会发送给浏览器）')
+    expect(clientReport).toContain('App.vue')
+    expect(clientReport).toContain('main.ts')
+    expect(clientReport).toContain('public')
+    expect(clientReport).toContain('robots.txt')
+    expect(clientReport).not.toContain('actions.ts')
+    expect(clientReport).not.toContain('server.ts')
+    expect(clientReport).toContain('客户端 sourcemap 已开启')
+
+    expect(serverReport).toContain('服务端')
+    expect(serverReport).toContain('actions.ts')
+    expect(serverReport).toContain('server.ts')
+    expect(await readdir(projectRoot)).not.toContain('dist')
   })
 
   test('加载框架配置、Vite 插件和两端共享的路径别名', async () => {

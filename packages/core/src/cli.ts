@@ -3,6 +3,7 @@ import path from 'node:path'
 import {
   buildApplication,
   createDevServer,
+  inspectApplication,
   startProduction,
   type MinistakDevServer,
 } from './dev.js'
@@ -14,6 +15,10 @@ switch (command) {
   case 'build': {
     const result = await buildApplication({ root })
     console.log(`构建完成：${result.manifest.actions.length} 个 Server Action`)
+    break
+  }
+  case 'inspect': {
+    console.log(await inspectApplication({ root }))
     break
   }
   case 'dev': {

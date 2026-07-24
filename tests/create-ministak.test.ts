@@ -139,11 +139,13 @@ describe('创建项目', () => {
     ) as {
       name: string
       dependencies: Record<string, string>
+      scripts: Record<string, string>
     }
 
     expect(packageJson.name).toBe('my-app')
     expect(packageJson.dependencies.ministak).toBe(await expectedCoreVersion())
     expect(packageJson.dependencies['server-only']).toBe('0.0.1')
+    expect(packageJson.scripts.inspect).toBe('ministak inspect')
     await expect(
       readFile(path.join(created.root, '.gitignore'), 'utf8'),
     ).resolves.toContain('node_modules/')
@@ -206,9 +208,11 @@ describe('创建项目', () => {
       await readFile(packageFile, 'utf8'),
     ) as {
       dependencies: Record<string, string>
+      scripts: Record<string, string>
     }
     expect(packageJson.dependencies.ministak).toBe(await expectedCoreVersion())
     expect(packageJson.dependencies['server-only']).toBe('0.0.1')
+    expect(packageJson.scripts.inspect).toBe('ministak inspect')
     packageJson.dependencies.ministak = `file:${path.join(packs, coreTarball!).replaceAll('\\', '/')}`
     await writeFile(
       packageFile,
@@ -234,6 +238,11 @@ describe('创建项目', () => {
       name: 'server-only',
       version: '0.0.1',
     })
+
+    const inspection = await runPnpm(['inspect'], projectRoot)
+    expect(inspection).toContain('客户端（会发送给浏览器）')
+    expect(inspection).toContain('服务端')
+    expect(await readdir(projectRoot)).not.toContain('dist')
 
     await runPnpm(['typecheck'], projectRoot)
     await runPnpm(['build'], projectRoot)

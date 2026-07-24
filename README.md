@@ -185,9 +185,12 @@ export default defineConfig({
 
 ```bash
 pnpm dev
+pnpm inspect
 pnpm build
 pnpm start
 ```
+
+`pnpm inspect` 使用真实生产构建生成客户端和服务端文件树，但不会写入 `dist`。客户端文件树就是可能发送给浏览器的文件边界。
 
 ## 许可证
 

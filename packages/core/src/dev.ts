@@ -7,11 +7,12 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { pathToFileURL } from 'node:url'
 import vue from '@vitejs/plugin-vue'
+import fg from 'fast-glob'
 import {
   build as viteBuild,
   createServer as createViteServer,
@@ -52,6 +53,16 @@ interface ServerBuildResult {
   modules: Set<string>
   manifest: ActionManifest
   configDependencies: string[]
+  output: Rollup.RollupOutput | Rollup.RollupOutput[]
+}
+
+interface ClientBuildResult {
+  basePath: string
+  appType: PageAppType
+  publicDir: string
+  copyPublicDir: boolean
+  sourcemap: boolean
+  output: Rollup.RollupOutput | Rollup.RollupOutput[]
 }
 
 function basePathFromResolvedViteBase(base: string): string {
@@ -236,10 +247,8 @@ async function buildClient(options: {
   actionPath: string
   outDir: string
   mode: string
-}): Promise<{
-  basePath: string
-  appType: PageAppType
-}> {
+  write?: boolean
+}): Promise<ClientBuildResult> {
   const loaded = await loadUserViteConfig(
     options.root,
     configEnvironment('build', options.mode, false),
@@ -258,27 +267,43 @@ async function buildClient(options: {
   )
   let basePath = '/'
   let appType: PageAppType = 'spa'
+  let publicDir = path.join(options.root, 'public')
+  let copyPublicDir = true
+  let sourcemap = false
   plugins.push({
     name: 'ministak-client-config',
     configResolved(config) {
       basePath = basePathFromResolvedViteBase(config.base)
       appType = resolvePageAppType(config.appType)
+      publicDir = config.publicDir
+      copyPublicDir = config.build.copyPublicDir
+      sourcemap = Boolean(config.build.sourcemap)
     },
   })
 
-  await viteBuild({
+  const output = (await viteBuild({
     ...loaded.config,
     root: options.root,
     configFile: false,
+    logLevel:
+      options.write === false ? 'silent' : loaded.config.logLevel,
     plugins,
     build: {
       ...loaded.config.build,
       outDir: options.outDir,
       emptyOutDir: true,
       sourcemap: loaded.config.build?.sourcemap ?? false,
+      write: options.write ?? loaded.config.build?.write,
     },
-  })
-  return { basePath, appType }
+  })) as Rollup.RollupOutput | Rollup.RollupOutput[]
+  return {
+    basePath,
+    appType,
+    publicDir,
+    copyPublicDir,
+    sourcemap,
+    output,
+  }
 }
 
 async function buildServer(options: {
@@ -292,6 +317,7 @@ async function buildServer(options: {
   appType: PageAppType
   command: ConfigEnv['command']
   mode: string
+  write?: boolean
 }): Promise<ServerBuildResult> {
   const loaded = await loadUserViteConfig(
     options.root,
@@ -318,9 +344,12 @@ async function buildServer(options: {
     ...loaded.config,
     root: options.root,
     configFile: false,
-    logLevel: options.development
-      ? (loaded.config.logLevel ?? 'warn')
-      : loaded.config.logLevel,
+    logLevel:
+      options.write === false
+        ? 'silent'
+        : options.development
+          ? (loaded.config.logLevel ?? 'warn')
+          : loaded.config.logLevel,
     plugins,
     build: {
       ...loaded.config.build,
@@ -331,6 +360,7 @@ async function buildServer(options: {
       sourcemap:
         loaded.config.build?.sourcemap ??
         (options.development ? 'inline' : false),
+      write: options.write ?? loaded.config.build?.write,
       rollupOptions: {
         ...loaded.config.build?.rollupOptions,
         input: SERVER_ENTRY_MODULE_ID,
@@ -348,6 +378,7 @@ async function buildServer(options: {
     modules: collectServerModules(output),
     manifest: frameworkPlugin.ministak.getManifest(),
     configDependencies: loaded.dependencies,
+    output,
   }
 }
 
@@ -356,14 +387,10 @@ export interface BuildApplicationOptions {
   mode?: string
 }
 
-export async function buildApplication(
+async function buildProductionApplication(
   options: BuildApplicationOptions,
-): Promise<{
-  manifest: ActionManifest
-  outDir: string
-  actionPath: string
-  basePath: string
-}> {
+  write?: boolean,
+) {
   const root = path.resolve(options.root)
   const mode = options.mode ?? 'production'
   const frameworkConfig = await loadMinistakConfig(
@@ -377,6 +404,7 @@ export async function buildApplication(
     actionPath: frameworkConfig.actionPath,
     outDir: path.join(frameworkConfig.outDir, 'client'),
     mode,
+    write,
   })
   const server = await buildServer({
     root,
@@ -389,7 +417,22 @@ export async function buildApplication(
     appType: client.appType,
     command: 'build',
     mode,
+    write,
   })
+
+  return { root, frameworkConfig, client, server }
+}
+
+export async function buildApplication(
+  options: BuildApplicationOptions,
+): Promise<{
+  manifest: ActionManifest
+  outDir: string
+  actionPath: string
+  basePath: string
+}> {
+  const { frameworkConfig, client, server } =
+    await buildProductionApplication(options)
 
   return {
     manifest: server.manifest,
@@ -397,6 +440,252 @@ export async function buildApplication(
     actionPath: frameworkConfig.actionPath,
     basePath: client.basePath,
   }
+}
+
+function outputList(
+  output: Rollup.RollupOutput | Rollup.RollupOutput[],
+): Rollup.RollupOutput[] {
+  return Array.isArray(output) ? output : [output]
+}
+
+function physicalModuleFile(id: string): string | undefined {
+  if (id.includes('\0')) {
+    return undefined
+  }
+
+  let file = id.split('?')[0]
+  if (file.startsWith('/@fs/')) {
+    file = file.slice('/@fs/'.length)
+  } else if (/^\/[A-Za-z]:\//.test(file)) {
+    file = file.slice(1)
+  }
+  return path.isAbsolute(file) ? path.resolve(file) : undefined
+}
+
+async function isFile(file: string): Promise<boolean> {
+  try {
+    return (await stat(file)).isFile()
+  } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'ENOENT'
+    ) {
+      return false
+    }
+    throw error
+  }
+}
+
+async function collectOutputFiles(
+  root: string,
+  output: Rollup.RollupOutput | Rollup.RollupOutput[],
+): Promise<Set<string>> {
+  const candidates = new Set<string>()
+
+  for (const current of outputList(output)) {
+    for (const item of current.output) {
+      if (item.type === 'chunk') {
+        for (const [id, module] of Object.entries(item.modules)) {
+          const file = physicalModuleFile(id)
+          if (
+            file &&
+            (module.renderedLength > 0 ||
+              /\.(?:css|less|sass|scss|styl|stylus|pcss|postcss)$/i.test(
+                file,
+              ))
+          ) {
+            candidates.add(file)
+          }
+        }
+        continue
+      }
+
+      for (const original of item.originalFileNames) {
+        candidates.add(
+          path.isAbsolute(original)
+            ? path.resolve(original)
+            : path.resolve(root, original),
+        )
+      }
+      if (item.fileName.endsWith('.html')) {
+        candidates.add(path.resolve(root, item.fileName))
+      }
+    }
+  }
+
+  const files = new Set<string>()
+  for (const file of candidates) {
+    if (await isFile(file)) {
+      files.add(path.resolve(file))
+    }
+  }
+  return files
+}
+
+async function collectPublicFiles(
+  publicDir: string,
+  enabled: boolean,
+): Promise<Set<string>> {
+  if (!enabled || !publicDir) {
+    return new Set()
+  }
+
+  try {
+    if (!(await stat(publicDir)).isDirectory()) {
+      return new Set()
+    }
+  } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'ENOENT'
+    ) {
+      return new Set()
+    }
+    throw error
+  }
+
+  return new Set(
+    (
+      await fg('**/*', {
+        cwd: publicDir,
+        absolute: true,
+        dot: true,
+        onlyFiles: true,
+      })
+    ).map((file) => path.resolve(file)),
+  )
+}
+
+function packageName(file: string): string | undefined {
+  const normalized = file.replaceAll('\\', '/')
+  const marker = '/node_modules/'
+  const index = normalized.lastIndexOf(marker)
+  if (index < 0) {
+    return undefined
+  }
+
+  const [first, second] = normalized
+    .slice(index + marker.length)
+    .split('/')
+  return first.startsWith('@') ? `${first}/${second}` : first
+}
+
+function isInside(root: string, file: string): boolean {
+  const relative = path.relative(root, file)
+  return (
+    relative === '' ||
+    (relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  )
+}
+
+interface TreeNode {
+  children: Map<string, TreeNode>
+}
+
+function renderTree(paths: string[]): string[] {
+  if (paths.length === 0) {
+    return ['└─ （无）']
+  }
+
+  const root: TreeNode = { children: new Map() }
+  for (const entry of paths) {
+    let node = root
+    for (const part of entry.split('/').filter(Boolean)) {
+      let child = node.children.get(part)
+      if (!child) {
+        child = { children: new Map() }
+        node.children.set(part, child)
+      }
+      node = child
+    }
+  }
+
+  const lines: string[] = []
+  const visit = (node: TreeNode, prefix: string) => {
+    const children = [...node.children].sort(([left], [right]) => {
+      const weight = (name: string) =>
+        name === '项目外文件' ? 1 : name === '第三方包' ? 2 : 0
+      return weight(left) - weight(right) || left.localeCompare(right)
+    })
+    children.forEach(([name, child], index) => {
+      const last = index === children.length - 1
+      lines.push(`${prefix}${last ? '└─' : '├─'} ${name}`)
+      visit(child, `${prefix}${last ? '   ' : '│  '}`)
+    })
+  }
+  visit(root, '')
+  return lines
+}
+
+function formatTarget(
+  title: string,
+  root: string,
+  files: Set<string>,
+): string[] {
+  const entries = new Set<string>()
+  for (const file of files) {
+    const dependency = packageName(file)
+    if (dependency) {
+      entries.add(`第三方包/${dependency}`)
+    } else if (isInside(root, file)) {
+      entries.add(path.relative(root, file).replaceAll('\\', '/'))
+    } else {
+      entries.add(`项目外文件/${file.replaceAll('\\', '/')}`)
+    }
+  }
+  return [title, ...renderTree([...entries])]
+}
+
+export async function inspectApplication(
+  options: BuildApplicationOptions,
+): Promise<string> {
+  const built = await buildProductionApplication(options, false)
+  const clientFiles = await collectOutputFiles(
+    built.root,
+    built.client.output,
+  )
+  const publicFiles = await collectPublicFiles(
+    built.client.publicDir,
+    built.client.copyPublicDir,
+  )
+  for (const file of publicFiles) {
+    clientFiles.add(file)
+  }
+  const serverFiles = await collectOutputFiles(
+    built.root,
+    built.server.output,
+  )
+
+  const lines = [
+    ...formatTarget(
+      '客户端（会发送给浏览器）',
+      built.root,
+      clientFiles,
+    ),
+  ]
+  if (built.client.sourcemap) {
+    lines.push(
+      '',
+      '警告：客户端 sourcemap 已开启，部署时可能同时公开源码。',
+    )
+  }
+  lines.push(
+    '',
+    ...formatTarget(
+      '服务端',
+      built.root,
+      serverFiles,
+    ),
+    '',
+    '说明：文件树不检查 Action 返回值和 Vite define 注入的内容。',
+  )
+  return lines.join('\n')
 }
 
 interface BackendProcess {

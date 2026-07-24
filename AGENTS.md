@@ -119,6 +119,7 @@ dist/server  -> Fastify、Action 和服务端依赖
 ```text
 pnpm install
 pnpm dev
+pnpm inspect
 pnpm typecheck
 pnpm test
 pnpm build
