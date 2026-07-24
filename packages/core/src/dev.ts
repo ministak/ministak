@@ -200,6 +200,8 @@ async function buildServer(options: {
   serverEntry: string
   outDir: string
   development: boolean
+  bodyLimit?: number
+  spaFallback: boolean
   command: ConfigEnv['command']
   mode: string
 }): Promise<ServerBuildResult> {
@@ -215,6 +217,8 @@ async function buildServer(options: {
     basePath: options.basePath,
     development: options.development,
     serverEntry: options.serverEntry,
+    bodyLimit: options.bodyLimit,
+    spaFallback: options.spaFallback,
   })
   const plugins = await createProjectPlugins(
     loaded.config,
@@ -292,6 +296,8 @@ export async function buildApplication(
     serverEntry: frameworkConfig.serverEntry,
     outDir: path.join(frameworkConfig.outDir, 'server'),
     development: false,
+    bodyLimit: frameworkConfig.bodyLimit,
+    spaFallback: frameworkConfig.spaFallback,
     command: 'build',
     mode,
   })
@@ -507,6 +513,8 @@ export async function createDevServer(
       serverEntry: frameworkConfig.serverEntry,
       outDir: outputDirectory,
       development: true,
+      bodyLimit: frameworkConfig.bodyLimit,
+      spaFallback: frameworkConfig.spaFallback,
       command: 'serve',
       mode,
     })

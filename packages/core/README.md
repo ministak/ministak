@@ -65,35 +65,40 @@ async function add() {
 
 ## 拦截 Server Action
 
-服务端入口是普通 Fastify 配置，可以直接使用 Hook、插件和路由。Action 请求会在 `request.serverAction` 中提供可读的 `相对路径#导出名`：
+服务端入口直接创建并默认导出 Fastify 实例，可以按照 Fastify 原生方式使用选项、Hook、插件和路由。Action 请求会在 `request.serverAction` 中提供可读的 `相对路径#导出名`：
 
 ```ts
 // src/server.ts
-import { ActionError, defineServer } from 'ministak/server'
+import Fastify from 'fastify'
+import { ActionError } from 'ministak/server'
 
-export default defineServer({
-  setup(app) {
-    app.addHook('onRequest', async (request) => {
-      if (request.serverAction?.name !== 'src/actions.ts#increment') {
-        return
-      }
+const app = Fastify()
 
-      const loggedIn = request.headers.cookie
-        ?.split(';')
-        .some((cookie) => cookie.trim() === 'session=logged-in')
+app.addHook('onRequest', async (request) => {
+  if (request.serverAction?.name !== 'src/actions.ts#increment') {
+    return
+  }
 
-      if (!loggedIn) {
-        throw new ActionError('请先登录', {
-          code: 'UNAUTHORIZED',
-          status: 401,
-        })
-      }
+  const loggedIn = request.headers.cookie
+    ?.split(';')
+    .some((cookie) => cookie.trim() === 'session=logged-in')
+
+  if (!loggedIn) {
+    throw new ActionError('请先登录', {
+      code: 'UNAUTHORIZED',
+      status: 401,
     })
-  },
+  }
 })
+
+app.get('/api/health', async () => ({ ok: true }))
+
+export default app
 ```
 
 普通请求的 `request.serverAction` 为 `null`。生产环境传输使用不可读的 Action ID，但服务端内部始终使用可读名称匹配。
+
+`app.register()`、`app.decorate()`、`app.setErrorHandler()` 等 API 均为 Fastify 原生行为。服务端入口只负责创建和配置实例，不调用 `app.listen()`；监听、关闭和开发热重启由 Ministak 管理。
 
 ## Action 请求上下文
 
@@ -124,7 +129,7 @@ import { ServerActionError } from 'ministak/client'
 
 - 框架配置：`ministak.config.*`
 - Vite 配置：`vite.config.*`
-- 服务端入口：`src/server.ts`
+- 服务端入口：`src/server.ts`，默认导出 Fastify 实例
 
 ```bash
 pnpm dev

@@ -14,12 +14,13 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "ministak": "workspace:*",
     "@types/node": "^24.10.0",
     "@vitejs/plugin-vue": "^6.0.5",
+    "fastify": "^5.10.0",
+    "ministak": "workspace:*",
     "server-only": "workspace:*",
-    "tsx": "^4.20.6",
     "tsup": "^8.5.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^8.1.5",
     "vitest": "^4.1.10",

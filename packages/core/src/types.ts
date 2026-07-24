@@ -1,8 +1,6 @@
 import type {
-  FastifyInstance,
   FastifyReply,
   FastifyRequest,
-  FastifyServerOptions,
 } from 'fastify'
 
 export interface ActionDefinition {
@@ -42,17 +40,6 @@ export interface ActionContext {
   reply: FastifyReply
   actionName: string
   requestId: string
-}
-
-export interface ActionOptions {
-  bodyLimit?: number
-}
-
-export interface ServerDefinition {
-  fastify?: FastifyServerOptions
-  setup?: (app: FastifyInstance) => Promise<void> | void
-  actions?: ActionOptions
-  spaFallback?: boolean
 }
 
 export interface RpcSuccess {

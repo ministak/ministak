@@ -111,29 +111,32 @@ function createServerEntryModule(options: {
   actionPath: string
   basePath: string
   development: boolean
+  bodyLimit?: number
+  spaFallback: boolean
 }): string {
   const serverEntryImport = rootImport(options.root, options.serverEntry)
   return `
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import serverDefinition from ${JSON.stringify(serverEntryImport)}
+import userApp from ${JSON.stringify(serverEntryImport)}
 import { createFrameworkApp } from 'ministak/server'
 import { actionRegistry } from ${JSON.stringify(ACTIONS_MODULE_ID)}
 
 const development = ${JSON.stringify(options.development)}
-const definition = serverDefinition ?? {}
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 const clientRoot = development
   ? undefined
   : path.resolve(currentDirectory, '../client')
 
 export const app = await createFrameworkApp({
-  definition,
+  app: userApp,
   actionPath: ${JSON.stringify(options.actionPath)},
   basePath: ${JSON.stringify(options.basePath)},
   actionRegistry,
   development,
   clientRoot,
+  bodyLimit: ${JSON.stringify(options.bodyLimit)},
+  spaFallback: ${JSON.stringify(options.spaFallback)},
 })
 
 let closing = false
@@ -181,6 +184,8 @@ export interface MinistakPluginOptions {
   basePath?: string
   development?: boolean
   serverEntry?: string
+  bodyLimit?: number
+  spaFallback?: boolean
 }
 
 export interface MinistakPluginApi {
@@ -323,6 +328,8 @@ export function createMinistakPlugin(
           actionPath: options.actionPath,
           basePath: options.basePath ?? '/',
           development: options.development ?? false,
+          bodyLimit: options.bodyLimit,
+          spaFallback: options.spaFallback ?? true,
         })
       }
 

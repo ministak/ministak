@@ -146,9 +146,13 @@ describe('创建项目', () => {
     await expect(
       readFile(path.join(created.root, '.gitignore'), 'utf8'),
     ).resolves.toContain('node_modules/')
-    await expect(
-      readFile(path.join(created.root, 'src/server.ts'), 'utf8'),
-    ).resolves.toContain("from 'ministak/server'")
+    const serverSource = await readFile(
+      path.join(created.root, 'src/server.ts'),
+      'utf8',
+    )
+    expect(serverSource).toContain("from 'fastify'")
+    expect(serverSource).toContain("from 'ministak/server'")
+    expect(serverSource).not.toContain('defineServer')
     expect(await readdir(created.root)).not.toContain('_gitignore')
   })
 

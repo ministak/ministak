@@ -2,17 +2,15 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import fastifyStatic from '@fastify/static'
-import Fastify, {
+import {
   type FastifyInstance,
   type FastifyReply,
   type FastifyRequest,
 } from 'fastify'
 import type {
   ActionContext,
-  ActionRegistration,
   ActionRegistry,
   RpcFailure,
-  ServerDefinition,
 } from './types.js'
 
 const actionStorage = new AsyncLocalStorage<ActionContext>()
@@ -32,10 +30,6 @@ export class ActionError extends Error {
     this.code = options.code ?? 'ACTION_ERROR'
     this.statusCode = options.status ?? 400
   }
-}
-
-export function defineServer(definition: ServerDefinition): ServerDefinition {
-  return definition
 }
 
 export function getActionContext(): ActionContext {
@@ -107,7 +101,7 @@ function sendActionError(
 
 interface RegisterActionRouteOptions {
   actionPath: string
-  resolvedActions: WeakMap<FastifyRequest, ActionRegistration>
+  actionRegistry: ActionRegistry
   bodyLimit?: number
 }
 
@@ -136,9 +130,19 @@ function registerActionRoute(
           })
         }
 
-        const action = options.resolvedActions.get(request)
+        const transportId = getHeader(request, 'x-action-id')
+        if (!transportId) {
+          throw new ActionError('缺少 Action ID', {
+            code: 'ACTION_ID_REQUIRED',
+          })
+        }
+
+        const action = options.actionRegistry[transportId]
         if (!action) {
-          throw new Error('Server Action 请求没有完成内部解析')
+          throw new ActionError('Server Action 不存在', {
+            code: 'ACTION_NOT_FOUND',
+            status: 404,
+          })
         }
 
         const body = request.body
@@ -183,63 +187,48 @@ function registerActionRoute(
 }
 
 export interface CreateFrameworkAppOptions {
-  definition: ServerDefinition
+  app: FastifyInstance
   actionPath: string
   actionRegistry: ActionRegistry
   development: boolean
   clientRoot?: string
   basePath?: string
+  bodyLimit?: number
+  spaFallback?: boolean
 }
 
 export async function createFrameworkApp(
   options: CreateFrameworkAppOptions,
 ) {
-  const definition = options.definition
-  const app = Fastify(definition.fastify ?? {})
-  const resolvedActions = new WeakMap<FastifyRequest, ActionRegistration>()
-
-  app.decorateRequest('serverAction', null)
-  app.addHook('onRequest', (request, _reply, done) => {
-    if (
-      request.method !== 'POST' ||
-      request.routeOptions.url !== options.actionPath
-    ) {
-      done()
-      return
-    }
-
-    const transportId = getHeader(request, 'x-action-id')
-    if (!transportId) {
-      done(
-        new ActionError('缺少 Action ID', { code: 'ACTION_ID_REQUIRED' }),
-      )
-      return
-    }
-
-    const action = options.actionRegistry[transportId]
-    if (!action) {
-      done(
-        new ActionError('Server Action 不存在', {
-          code: 'ACTION_NOT_FOUND',
-          status: 404,
-        }),
-      )
-      return
-    }
-
-    request.serverAction = { name: action.name }
-    resolvedActions.set(request, action)
-    done()
-  })
-
-  if (definition.setup) {
-    await definition.setup(app)
+  const app = options.app
+  if (
+    !app ||
+    typeof app.decorateRequest !== 'function' ||
+    typeof app.post !== 'function'
+  ) {
+    throw new Error('服务端入口必须默认导出 Fastify 实例')
   }
+
+  app.decorateRequest('serverAction', {
+    getter(this: FastifyRequest) {
+      if (
+        this.method !== 'POST' ||
+        this.routeOptions.url !== options.actionPath
+      ) {
+        return null
+      }
+      const transportId = getHeader(this, 'x-action-id')
+      const action = transportId
+        ? options.actionRegistry[transportId]
+        : undefined
+      return action ? { name: action.name } : null
+    },
+  })
 
   registerActionRoute(app, {
     actionPath: options.actionPath,
-    resolvedActions,
-    bodyLimit: definition.actions?.bodyLimit,
+    actionRegistry: options.actionRegistry,
+    bodyLimit: options.bodyLimit,
   })
 
   if (!options.development) {
@@ -255,7 +244,7 @@ export async function createFrameworkApp(
       root: options.clientRoot,
       prefix: basePath,
     })
-    if (definition.spaFallback !== false) {
+    if (options.spaFallback !== false) {
       try {
         app.setNotFoundHandler((request, reply) => {
           const pathname = new URL(request.url, 'http://localhost').pathname
@@ -284,5 +273,4 @@ export async function createFrameworkApp(
 export type {
   ActionContext,
   ServerActionInfo,
-  ServerDefinition,
 } from './types.js'

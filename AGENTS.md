@@ -15,7 +15,7 @@ Vue 客户端 SPA + Node/Fastify 服务端 + Server Action
 ## 核心能力
 
 - Vue 作为纯客户端 SPA 运行。
-- Fastify 作为 Node 服务端，应用可直接注册 Hook、插件和路由。
+- 应用直接创建并导出 Fastify 实例，可以使用原生选项、Hook、插件和路由。
 - 文件级 `'use server'` 声明可远程调用的异步函数。
 - 客户端从真实源码导入 Server Action，保留 TypeScript 类型检查和源码跳转。
 - 开发环境使用可读的 `相对路径#导出名` 作为 Action ID，生产环境使用不透明的 Action ID。
@@ -33,7 +33,7 @@ Vue 客户端 SPA + Node/Fastify 服务端 + Server Action
 'use server'        -> Server Action
 server-only         -> 服务端专有模块
 普通 .ts            -> 客户端、服务端或两端共享
-src/server.ts       -> 默认服务端入口
+src/server.ts       -> 默认导出 Fastify 实例
 ```
 
 Fastify Hook 可以通过 `request.serverAction?.name` 匹配 Action。Action 内可以通过 `getActionContext()` 访问当前请求上下文。通用请求处理使用 Fastify Hook，具体权限由 Action 内的应用函数显式检查。
@@ -44,7 +44,8 @@ Fastify Hook 可以通过 `request.serverAction?.name` 匹配 Action。Action �
 
 - 框架配置使用 `ministak.config.*`。
 - Vite 配置继续使用原生 `vite.config.*`。
-- Fastify 实例选项、Hook、插件和路由写在服务端入口。
+- Fastify 实例由服务端入口直接创建并默认导出，入口不调用 `listen()`。
+- Fastify 实例选项、Hook、插件和路由使用原生 API。
 
 开发模式由 Vite 主进程管理客户端 HMR、Action 代理和 Fastify 子进程。生产构建输出：
 

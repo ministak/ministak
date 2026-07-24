@@ -6,6 +6,7 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, test } from 'vitest'
 import {
   ActionError,
@@ -35,14 +36,13 @@ afterEach(async () => {
 
 async function createActionApp(options: {
   bodyLimit?: number
-  setup?: Parameters<typeof createFrameworkApp>[0]['definition']['setup']
+  configure?: (app: FastifyInstance) => Promise<void> | void
   handler?: () => Promise<unknown>
 } = {}): Promise<FrameworkApp> {
+  const userApp = Fastify()
+  await options.configure?.(userApp)
   const app = await createFrameworkApp({
-    definition: {
-      setup: options.setup,
-      actions: { bodyLimit: options.bodyLimit },
-    },
+    app: userApp,
     actionPath: '/_actions',
     actionRegistry: {
       [transportId]: {
@@ -51,6 +51,7 @@ async function createActionApp(options: {
       },
     },
     development: true,
+    bodyLimit: options.bodyLimit,
   })
   apps.push(app)
   return app
@@ -61,7 +62,7 @@ describe('Server Action Fastify 请求链路', () => {
     let hookActionName: string | undefined
     let contextActionName: string | undefined
     const app = await createActionApp({
-      setup(instance) {
+      configure(instance) {
         instance.addHook('onRequest', async (request) => {
           hookActionName = request.serverAction?.name
         })
@@ -99,7 +100,7 @@ describe('Server Action Fastify 请求链路', () => {
   test('统一处理内容解析、请求体限制和 Hook 错误', async () => {
     const app = await createActionApp({
       bodyLimit: 64,
-      setup(instance) {
+      configure(instance) {
         instance.addHook('onRequest', async (request) => {
           if (request.headers['x-hook-error']) {
             throw new Error('AUTH_SECRET_DETAIL')
@@ -188,6 +189,22 @@ describe('Server Action Fastify 请求链路', () => {
     })
   })
 
+  test('保留用户创建的 Fastify 实例和原生路由', async () => {
+    const userApp = Fastify()
+    userApp.get('/health', async () => ({ ok: true }))
+
+    const app = await createFrameworkApp({
+      app: userApp,
+      actionPath: '/_actions',
+      actionRegistry: {},
+      development: true,
+    })
+    apps.push(app)
+
+    expect(app).toBe(userApp)
+    const response = await app.inject({ method: 'GET', url: '/health' })
+    expect(response.json()).toEqual({ ok: true })
+  })
 })
 
 describe('生产 SPA 静态服务', () => {
@@ -202,8 +219,9 @@ describe('生产 SPA 静态服务', () => {
 
   test('按照 Vite base 提供静态资源和页面回退', async () => {
     const clientRoot = await createClientRoot()
+    const userApp = Fastify()
     const app = await createFrameworkApp({
-      definition: {},
+      app: userApp,
       actionPath: '/_actions',
       actionRegistry: {},
       development: false,
@@ -234,19 +252,17 @@ describe('生产 SPA 静态服务', () => {
 
   test('关闭 spaFallback 后保留用户的 NotFoundHandler', async () => {
     const clientRoot = await createClientRoot()
+    const userApp = Fastify()
+    userApp.setNotFoundHandler((_request, reply) =>
+      reply.code(418).send({ custom: true }),
+    )
     const app = await createFrameworkApp({
-      definition: {
-        spaFallback: false,
-        setup(instance) {
-          instance.setNotFoundHandler((_request, reply) =>
-            reply.code(418).send({ custom: true }),
-          )
-        },
-      },
+      app: userApp,
       actionPath: '/_actions',
       actionRegistry: {},
       development: false,
       clientRoot,
+      spaFallback: false,
     })
     apps.push(app)
 
