@@ -39,6 +39,10 @@ import {
   createMinistakPlugin,
   SERVER_ENTRY_MODULE_ID,
 } from './vite.js'
+import {
+  resolveEnvironment,
+  type EnvironmentMode,
+} from './env.js'
 
 function normalizePath(file: string): string {
   return path.resolve(file.split('?')[0]).replaceAll('\\', '/')
@@ -82,6 +86,19 @@ function validateUserViteConfig(
   config: UserConfig,
   target: 'client' | 'server',
 ): void {
+  if (config.mode !== undefined) {
+    throw new Error('运行模式由 Ministak 管理，请不要在 Vite 配置中设置 mode')
+  }
+  if (config.envDir !== undefined) {
+    throw new Error(
+      '环境变量目录由 Ministak 管理，请不要在 Vite 配置中设置 envDir',
+    )
+  }
+  if (config.envPrefix !== undefined) {
+    throw new Error(
+      '客户端环境变量前缀由 Ministak 管理，请不要在 Vite 配置中设置 envPrefix',
+    )
+  }
   if (config.root !== undefined) {
     throw new Error(
       '项目根目录由 Ministak 管理，请不要在 Vite 配置中设置 root',
@@ -192,7 +209,7 @@ async function createProjectPlugins(
 
 function configEnvironment(
   command: ConfigEnv['command'],
-  mode: string,
+  mode: EnvironmentMode,
   isSsrBuild: boolean,
 ): ConfigEnv {
   return { command, mode, isSsrBuild, isPreview: false }
@@ -246,7 +263,7 @@ async function buildClient(options: {
   transportKey: string
   actionPath: string
   outDir: string
-  mode: string
+  mode: EnvironmentMode
   write?: boolean
 }): Promise<ClientBuildResult> {
   const loaded = await loadUserViteConfig(
@@ -284,6 +301,7 @@ async function buildClient(options: {
   const output = (await viteBuild({
     ...loaded.config,
     root: options.root,
+    mode: options.mode,
     configFile: false,
     logLevel:
       options.write === false ? 'silent' : loaded.config.logLevel,
@@ -316,7 +334,7 @@ async function buildServer(options: {
   development: boolean
   appType: PageAppType
   command: ConfigEnv['command']
-  mode: string
+  mode: EnvironmentMode
   write?: boolean
 }): Promise<ServerBuildResult> {
   const loaded = await loadUserViteConfig(
@@ -332,6 +350,7 @@ async function buildServer(options: {
     basePath: options.basePath,
     development: options.development,
     serverEntry: options.serverEntry,
+    serverOutputDirectory: options.outDir,
     appType: options.appType,
   })
   const plugins = await createProjectPlugins(
@@ -343,6 +362,7 @@ async function buildServer(options: {
   const output = (await viteBuild({
     ...loaded.config,
     root: options.root,
+    mode: options.mode,
     configFile: false,
     logLevel:
       options.write === false
@@ -384,7 +404,6 @@ async function buildServer(options: {
 
 export interface BuildApplicationOptions {
   root: string
-  mode?: string
 }
 
 async function buildProductionApplication(
@@ -392,7 +411,7 @@ async function buildProductionApplication(
   write?: boolean,
 ) {
   const root = path.resolve(options.root)
-  const mode = options.mode ?? 'production'
+  const mode = 'production'
   const frameworkConfig = await loadMinistakConfig(
     root,
     configEnvironment('build', mode, false),
@@ -642,6 +661,101 @@ function formatTarget(
   return [title, ...renderTree([...entries])]
 }
 
+const SOURCE_FILE_PATTERN =
+  /\.(?:[cm]?[jt]sx?|vue)$/i
+
+async function collectEnvironmentReferences(
+  root: string,
+  files: Set<string>,
+  target: 'client' | 'server',
+): Promise<Set<string>> {
+  const names = new Set<string>()
+  const patterns =
+    target === 'client'
+      ? [
+          /\bimport\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
+          /\bimport\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g,
+        ]
+      : [
+          /\bprocess\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
+          /\bprocess\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g,
+        ]
+
+  for (const file of files) {
+    if (!isInside(root, file) || !SOURCE_FILE_PATTERN.test(file)) {
+      continue
+    }
+    const source = await readFile(file, 'utf8')
+    for (const pattern of patterns) {
+      for (const match of source.matchAll(pattern)) {
+        names.add(match[1])
+      }
+    }
+  }
+  return names
+}
+
+function formatEnvironment(
+  root: string,
+  mode: EnvironmentMode,
+  clientReferences: Set<string>,
+  serverReferences: Set<string>,
+): string[] {
+  const environment = resolveEnvironment(root, mode)
+  const names = new Set<string>()
+
+  for (const name of environment.variables.keys()) {
+    const variable = environment.variables.get(name)
+    if (
+      variable?.sources.some(
+        (source) => source !== '系统环境变量',
+      ) ||
+      name.startsWith('VITE_')
+    ) {
+      names.add(name)
+    }
+  }
+  for (const name of clientReferences) {
+    if (name.startsWith('VITE_')) {
+      names.add(name)
+    }
+  }
+  for (const name of serverReferences) {
+    names.add(name)
+  }
+
+  const lines = [`环境变量（${mode}，值已隐藏）`]
+  const sortedNames = [...names].sort((left, right) =>
+    left.localeCompare(right),
+  )
+  if (sortedNames.length === 0) {
+    lines.push('└─ （无）')
+    return lines
+  }
+
+  sortedNames.forEach((name, index) => {
+    const last = index === sortedNames.length - 1
+    const branch = last ? '└─' : '├─'
+    const indent = last ? '   ' : '│  '
+    const variable = environment.variables.get(name)
+    lines.push(`${branch} ${name}`)
+    lines.push(`${indent}├─ 来源：${variable?.source ?? '未设置'}`)
+    lines.push(
+      `${indent}└─ 范围：${
+        name.startsWith('VITE_') ? '客户端和服务端' : '仅服务端'
+      }`,
+    )
+    if (variable && variable.sources.length > 1) {
+      lines.splice(
+        lines.length - 1,
+        0,
+        `${indent}├─ 覆盖：${variable.sources.join(' → ')}`,
+      )
+    }
+  })
+  return lines
+}
+
 export async function inspectApplication(
   options: BuildApplicationOptions,
 ): Promise<string> {
@@ -661,6 +775,18 @@ export async function inspectApplication(
     built.root,
     built.server.output,
   )
+  const clientEnvironmentReferences =
+    await collectEnvironmentReferences(
+      built.root,
+      clientFiles,
+      'client',
+    )
+  const serverEnvironmentReferences =
+    await collectEnvironmentReferences(
+      built.root,
+      serverFiles,
+      'server',
+    )
 
   const lines = [
     ...formatTarget(
@@ -681,6 +807,13 @@ export async function inspectApplication(
       '服务端',
       built.root,
       serverFiles,
+    ),
+    '',
+    ...formatEnvironment(
+      built.root,
+      'production',
+      clientEnvironmentReferences,
+      serverEnvironmentReferences,
     ),
     '',
     '说明：文件树不检查 Action 返回值和 Vite define 注入的内容。',
@@ -930,7 +1063,6 @@ export interface CreateDevServerOptions {
   root: string
   port?: number
   host?: string
-  mode?: string
 }
 
 export interface MinistakDevServer {
@@ -948,7 +1080,7 @@ export async function createDevServer(
   options: CreateDevServerOptions,
 ): Promise<MinistakDevServer> {
   const root = path.resolve(options.root)
-  const mode = options.mode ?? 'development'
+  const mode = 'development'
   const frameworkConfig = await loadMinistakConfig(
     root,
     configEnvironment('serve', mode, false),
@@ -1037,8 +1169,8 @@ export async function createDevServer(
   const vite = await createViteServer({
     ...clientViteConfig.config,
     root,
-    configFile: false,
     mode,
+    configFile: false,
     plugins: [
       createBackendProxyPlugin(() => backend?.port),
       ...clientPlugins,
@@ -1115,7 +1247,8 @@ export async function createDevServer(
   }
 
   const shouldRestart = (file: string): boolean =>
-    configDependencies.has(normalizePath(file)) || isProjectConfigFile(file)
+    configDependencies.has(normalizePath(file)) ||
+    isProjectConfigFile(file)
 
   const requestRestart = () => {
     if (closed || restartRequested) {

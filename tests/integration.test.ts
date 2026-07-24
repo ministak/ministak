@@ -53,15 +53,18 @@ afterEach(async () => {
 async function startBuiltServer(
   root: string,
   outDir = path.join(root, 'dist'),
+  environment: NodeJS.ProcessEnv = {},
+  cwd = root,
 ): Promise<{
   child: ChildProcess
   url: string
 }> {
   const entry = path.join(outDir, 'server/index.mjs')
   const child = fork(entry, [], {
-    cwd: root,
+    cwd,
     env: {
       ...process.env,
+      ...environment,
       MINISTAK_PORT: '0',
       MINISTAK_HOST: '127.0.0.1',
     },
@@ -397,6 +400,150 @@ describe('生产构建和 HTTP 调用', () => {
     expect(await readdir(projectRoot)).not.toContain('dist')
   })
 
+  test('服务端加载环境变量且检查结果不显示变量值', async () => {
+    const projectRoot = path.join(testProjectsRoot, 'environment')
+    await mkdir(testProjectsRoot, { recursive: true })
+    await cp(exampleRoot, projectRoot, {
+      recursive: true,
+      filter: (source) =>
+        !source.includes(`${path.sep}node_modules`) &&
+        !source.includes(`${path.sep}dist`) &&
+        !source.includes(`${path.sep}.ministak`),
+    })
+    await writeFile(
+      path.join(projectRoot, '.env'),
+      [
+        'MINISTAK_TEST_PRIVATE=base-private',
+        'VITE_MINISTAK_TEST_PUBLIC=base-public',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, '.env.local'),
+      'MINISTAK_TEST_PRIVATE=local-private\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, '.env.development'),
+      'MINISTAK_TEST_PRIVATE=development-private\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, '.env.development.local'),
+      'MINISTAK_TEST_PRIVATE=development-local-private\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, '.env.production'),
+      'MINISTAK_TEST_PRIVATE=production-private\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, '.env.production.local'),
+      'MINISTAK_TEST_PRIVATE=production-local-private\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, 'src/server.ts'),
+      `import Fastify from 'fastify'
+
+const environment = process.env.MINISTAK_TEST_PRIVATE
+const missing = process.env.MINISTAK_TEST_MISSING
+const app = Fastify()
+
+app.get('/environment', async () => ({ environment, missing }))
+
+export default app
+`,
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, 'src/client-environment.ts'),
+      `console.log(import.meta.env.VITE_MINISTAK_TEST_PUBLIC)\n`,
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, 'src/main.ts'),
+      `import { createApp } from 'vue'
+import App from './App.vue'
+import './client-environment'
+
+createApp(App).mount('#app')
+`,
+      'utf8',
+    )
+
+    const report = await inspectApplication({ root: projectRoot })
+    expect(report).toContain('环境变量（production，值已隐藏）')
+    expect(report).toContain('MINISTAK_TEST_PRIVATE')
+    expect(report).toContain('来源：.env.production.local')
+    expect(report).toContain(
+      '覆盖：.env → .env.local → .env.production → .env.production.local',
+    )
+    expect(report).toContain('VITE_MINISTAK_TEST_PUBLIC')
+    expect(report).toContain('范围：客户端和服务端')
+    expect(report).toContain('MINISTAK_TEST_MISSING')
+    expect(report).toContain('来源：未设置')
+    expect(report).not.toContain('production-local-private')
+    expect(report).not.toContain('base-public')
+
+    await buildApplication({ root: projectRoot })
+    const serverDirectory = path.join(projectRoot, 'dist/server')
+    const serverCode = (
+      await Promise.all(
+        (
+          await readdir(serverDirectory, {
+            recursive: true,
+          })
+        )
+          .filter((file) => file.endsWith('.mjs'))
+          .map((file) =>
+            readFile(path.join(serverDirectory, file), 'utf8'),
+          ),
+      )
+    ).join('\n')
+    expect(serverCode).not.toContain('production-local-private')
+    expect(serverCode).not.toMatch(/from\s+['"]vite['"]/)
+
+    const production = await startBuiltServer(
+      projectRoot,
+      path.join(projectRoot, 'dist'),
+      {},
+      repositoryRoot,
+    )
+    expect(
+      await fetch(`${production.url}/environment`).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ environment: 'production-local-private' })
+
+    const overridden = await startBuiltServer(
+      projectRoot,
+      path.join(projectRoot, 'dist'),
+      { MINISTAK_TEST_PRIVATE: 'system-private' },
+    )
+    expect(
+      await fetch(`${overridden.url}/environment`).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ environment: 'system-private' })
+
+    const development = await createDevServer({
+      root: projectRoot,
+      port: 0,
+    })
+    try {
+      expect(
+        await fetch(`${development.url}/environment`).then(
+          (response) => response.json(),
+        ),
+      ).toEqual({ environment: 'development-local-private' })
+    } finally {
+      await development.close()
+    }
+  })
+
   test('加载框架配置、Vite 插件和两端共享的路径别名', async () => {
     const projectRoot = path.join(testProjectsRoot, 'project-config')
     await mkdir(testProjectsRoot, { recursive: true })
@@ -517,6 +664,24 @@ describe('生产构建和 HTTP 调用', () => {
       name: '项目根目录',
       config: "export default { root: 'src' }\n",
       message: '项目根目录由 Ministak 管理',
+    },
+    {
+      id: 'mode',
+      name: '运行模式',
+      config: "export default { mode: 'staging' }\n",
+      message: '运行模式由 Ministak 管理',
+    },
+    {
+      id: 'env-dir',
+      name: '环境变量目录',
+      config: "export default { envDir: 'config' }\n",
+      message: '环境变量目录由 Ministak 管理',
+    },
+    {
+      id: 'env-prefix',
+      name: '客户端环境变量前缀',
+      config: "export default { envPrefix: 'PUBLIC_' }\n",
+      message: '客户端环境变量前缀由 Ministak 管理',
     },
     {
       id: 'out-dir',

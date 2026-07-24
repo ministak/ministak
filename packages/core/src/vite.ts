@@ -109,24 +109,42 @@ function createActionRegistryModule(
 function createServerEntryModule(options: {
   root: string
   serverEntry: string
+  serverOutputDirectory: string
   actionPath: string
   basePath: string
   development: boolean
   appType: PageAppType
 }): string {
   const serverEntryImport = rootImport(options.root, options.serverEntry)
+  const applicationRoot = path
+    .relative(options.serverOutputDirectory, options.root)
+    .replaceAll('\\', '/')
   return `
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import userApp from ${JSON.stringify(serverEntryImport)}
-import { createFrameworkApp } from 'ministak/server'
+import {
+  createFrameworkApp,
+  loadServerEnvironment,
+} from 'ministak/server'
 import { actionRegistry } from ${JSON.stringify(ACTIONS_MODULE_ID)}
 
 const development = ${JSON.stringify(options.development)}
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
+const applicationRoot = path.resolve(
+  currentDirectory,
+  ${JSON.stringify(applicationRoot)},
+)
 const clientRoot = development
   ? undefined
   : path.resolve(currentDirectory, '../client')
+
+loadServerEnvironment(
+  applicationRoot,
+  development ? 'development' : 'production',
+)
+const { default: userApp } = await import(
+  ${JSON.stringify(serverEntryImport)}
+)
 
 export const app = await createFrameworkApp({
   app: userApp,
@@ -175,9 +193,8 @@ await start()
 `
 }
 
-export interface MinistakPluginOptions {
+interface CommonMinistakPluginOptions {
   root?: string
-  target: 'client' | 'server'
   transportKey: string
   actionPath: string
   basePath?: string
@@ -185,6 +202,15 @@ export interface MinistakPluginOptions {
   serverEntry?: string
   appType?: PageAppType
 }
+
+export type MinistakPluginOptions =
+  | (CommonMinistakPluginOptions & {
+      target: 'client'
+    })
+  | (CommonMinistakPluginOptions & {
+      target: 'server'
+      serverOutputDirectory: string
+    })
 
 export interface MinistakPluginApi {
   getManifest(): ActionManifest
@@ -323,6 +349,7 @@ export function createMinistakPlugin(
         return createServerEntryModule({
           root,
           serverEntry,
+          serverOutputDirectory: options.serverOutputDirectory,
           actionPath: options.actionPath,
           basePath: options.basePath ?? '/',
           development: options.development ?? false,

@@ -18,6 +18,8 @@ import {
   type PageAppType,
 } from './routing.js'
 
+export { loadServerEnvironment } from './env.js'
+
 const actionStorage = new AsyncLocalStorage<ActionContext>()
 
 export interface ActionErrorOptions {

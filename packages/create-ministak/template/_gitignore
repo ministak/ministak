@@ -2,3 +2,5 @@ node_modules/
 dist/
 .ministak/
 *.tsbuildinfo
+.env.local
+.env.*.local

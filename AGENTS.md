@@ -48,6 +48,7 @@ Fastify Hook 可以通过 `request.serverAction?.name` 匹配 Action。Action �
 - Fastify 实例由服务端入口直接创建并默认导出，入口不调用 `listen()`。
 - Fastify 实例选项、Hook、插件和路由使用原生 API。
 - 框架必须接管的 Vite 配置发生冲突时直接报错，不静默覆盖。
+- 客户端环境变量使用 `VITE_` 前缀，服务端环境变量通过 `process.env` 读取。
 
 开发模式由 Vite 主进程管理客户端 HMR、Fastify 请求转发和 Fastify 子进程。生产构建输出：
 
@@ -68,6 +69,7 @@ dist/server  -> Fastify、Action 和服务端依赖
 │  │  │  ├─ index.ts              公共入口
 │  │  │  ├─ config.ts             框架配置类型
 │  │  │  ├─ config-loader.ts      配置加载
+│  │  │  ├─ env.ts                服务端环境变量加载
 │  │  │  ├─ types.ts              共享类型
 │  │  │  ├─ action-scanner.ts     Action 扫描与校验
 │  │  │  ├─ client.ts             浏览器 RPC 客户端
@@ -99,6 +101,7 @@ dist/server  -> Fastify、Action 和服务端依赖
 │  ├─ action-scanner.test.ts      Action 编译测试
 │  ├─ client.test.ts              RPC 客户端测试
 │  ├─ create-ministak.test.ts      创建器与仓库外安装测试
+│  ├─ env.test.ts                 环境变量加载测试
 │  ├─ server.test.ts              Fastify 运行时测试
 │  └─ integration.test.ts         构建与热更新集成测试
 ├─ AGENTS.md                      项目概览和接手入口

@@ -2,3 +2,5 @@ node_modules/
 dist/
 .ministak/
 .idea/
+.env.local
+.env.*.local

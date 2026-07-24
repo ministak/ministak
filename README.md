@@ -148,6 +148,21 @@ export const databaseUrl = process.env.DATABASE_URL
 
 客户端依赖链触及该模块时，Ministak 会直接报错。Action 模块及其服务端依赖不会进入客户端产物。
 
+## 环境变量
+
+开发环境依次读取 `.env`、`.env.local`、`.env.development` 和 `.env.development.local`；生产环境依次读取 `.env`、`.env.local`、`.env.production` 和 `.env.production.local`。后面的文件覆盖前面的文件，启动进程中已有的环境变量优先级最高。
+
+服务端通过 `process.env` 读取全部变量。客户端通过 `import.meta.env` 读取变量，只有 `VITE_` 开头的名称会进入客户端，不能用于密钥：
+
+```ts
+const databaseUrl = process.env.DATABASE_URL
+const apiUrl = import.meta.env.VITE_API_URL
+```
+
+`.env.local` 和 `.env.*.local` 默认不会提交，适合存放本机配置。生产环境也可以直接由部署平台注入变量。
+
+修改环境文件后需要重新启动开发服务器。
+
 ## 错误处理
 
 需要公开给客户端的业务异常使用 `ActionError`。客户端会收到 `ServerActionError`，其中包含 `message`、`code`、`status` 和 `requestId`。
@@ -190,7 +205,7 @@ pnpm build
 pnpm start
 ```
 
-`pnpm inspect` 使用真实生产构建生成客户端和服务端文件树，但不会写入 `dist`。客户端文件树就是可能发送给浏览器的文件边界。
+`pnpm inspect` 使用真实生产构建生成客户端和服务端文件树，但不会写入 `dist`。它还会显示生产环境变量的名称、最终来源、覆盖关系和可见范围，所有变量值都会隐藏。客户端文件树和 `VITE_` 变量就是可能发送给浏览器的边界。
 
 ## 许可证
 
