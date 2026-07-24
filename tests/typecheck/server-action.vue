@@ -1,5 +1,14 @@
 <script setup lang="ts">
+import { setServerActionHooks } from 'ministak/client'
 import { incrementCounter } from '../../examples/basic/src/actions'
+
+setServerActionHooks({
+  onRequest({ action }) {
+    if (action === incrementCounter) {
+      return
+    }
+  },
+})
 
 async function verifyServerActionTypes() {
   const result = await incrementCounter()

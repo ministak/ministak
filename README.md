@@ -92,6 +92,51 @@ async function add() {
 
 `'use server'` 文件只能导出具名异步函数和 TypeScript 类型，不支持默认导出、重导出、导出变量或同步函数。
 
+## 客户端 Action Hook
+
+可以在客户端统一处理所有 Action 请求：
+
+```ts
+// src/main.ts
+import {
+  ServerActionError,
+  setServerActionHooks,
+} from 'ministak/client'
+import { increment } from './actions'
+
+setServerActionHooks({
+  onRequest({ action, args, headers }) {
+    headers.set('x-trace-id', crypto.randomUUID())
+
+    if (action === increment) {
+      console.log('正在增加计数', args)
+    }
+  },
+
+  onResponse({ response, data }) {
+    console.log(response.status)
+    return data
+  },
+
+  onError({ error }) {
+    if (
+      error instanceof ServerActionError &&
+      error.status === 401
+    ) {
+      location.assign('/login')
+      return
+    }
+    throw error
+  },
+})
+```
+
+`onRequest` 可以修改 `args` 和 `headers`。`onResponse` 的返回值会替换 Action 原始结果；`onError` 正常返回表示异常已处理，返回值成为最终结果，抛出异常则继续失败。三个 Hook 都可以是异步函数。
+
+具体 Action 通过函数身份匹配，不依赖生产环境中的传输 ID。重复调用 `setServerActionHooks()` 会替换原配置，不会叠加；不传参数可以清除配置。
+
+全局 Hook 修改结果后，TypeScript 仍保留服务端函数原本的返回类型。返回替代结果时，应保证它与对应 Action 的返回类型兼容。
+
 ## Fastify 和 Action 鉴权
 
 `src/server.ts` 直接创建并默认导出 Fastify 实例。选项、Hook、插件、装饰器、错误处理和普通路由都使用 Fastify 原生 API：

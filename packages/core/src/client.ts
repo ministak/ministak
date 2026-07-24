@@ -12,6 +12,46 @@ export class ServerActionError extends Error {
   }
 }
 
+export type ClientServerAction = (...args: never[]) => unknown
+
+export interface ServerActionRequestContext {
+  readonly action: ClientServerAction
+  args: unknown[]
+  headers: Headers
+}
+
+export interface ServerActionResponseContext
+  extends ServerActionRequestContext {
+  readonly response: Response
+  readonly data: unknown
+}
+
+export interface ServerActionErrorContext
+  extends ServerActionRequestContext {
+  readonly response?: Response
+  readonly error: unknown
+}
+
+export interface ServerActionHooks {
+  onRequest?(
+    context: ServerActionRequestContext,
+  ): void | Promise<void>
+  onResponse?(
+    context: ServerActionResponseContext,
+  ): unknown | Promise<unknown>
+  onError?(
+    context: ServerActionErrorContext,
+  ): unknown | Promise<unknown>
+}
+
+let serverActionHooks: ServerActionHooks | undefined
+
+export function setServerActionHooks(
+  hooks?: ServerActionHooks,
+): void {
+  serverActionHooks = hooks
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -58,36 +98,70 @@ export async function callServerAction(
   actionPath: string,
   transportId: string,
   args: unknown[],
+  action: ClientServerAction = callServerAction as ClientServerAction,
 ): Promise<unknown> {
-  const response = await fetch(actionPath, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
+  const hooks = serverActionHooks
+  const request: ServerActionRequestContext = {
+    action,
+    args,
+    headers: new Headers({
       'content-type': 'application/json',
       'x-action-id': transportId,
-    },
-    body: JSON.stringify({ args }),
-  })
-
-  const payload = await readRpcResponse(response)
-  if (!payload.ok) {
-    throw new ServerActionError(
-      payload.error.code,
-      payload.error.message,
-      response.status,
-      payload.error.requestId,
-    )
+    }),
   }
+  let response: Response | undefined
 
-  return payload.data
+  try {
+    await hooks?.onRequest?.(request)
+    response = await fetch(actionPath, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: request.headers,
+      body: JSON.stringify({ args: request.args }),
+    })
+
+    const payload = await readRpcResponse(response)
+    if (!payload.ok) {
+      throw new ServerActionError(
+        payload.error.code,
+        payload.error.message,
+        response.status,
+        payload.error.requestId,
+      )
+    }
+
+    if (hooks?.onResponse) {
+      return await hooks.onResponse({
+        ...request,
+        response,
+        data: payload.data,
+      })
+    }
+    return payload.data
+  } catch (error) {
+    if (hooks?.onError) {
+      return await hooks.onError({
+        ...request,
+        response,
+        error,
+      })
+    }
+    throw error
+  }
 }
 
 export function createServerReference<T extends (...args: never[]) => unknown>(
   actionPath: string,
   transportId: string,
 ): (...args: Parameters<T>) => Promise<Awaited<ReturnType<T>>> {
-  return (...args) =>
-    callServerAction(actionPath, transportId, args) as Promise<
+  const action = (...args: Parameters<T>) =>
+    callServerAction(
+      actionPath,
+      transportId,
+      args,
+      action as ClientServerAction,
+    ) as Promise<
       Awaited<ReturnType<T>>
     >
+  return action
 }

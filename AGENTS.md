@@ -20,6 +20,7 @@ Vue 客户端 SPA + Node/Fastify 服务端 + Server Action
 - 客户端从真实源码导入 Server Action，保留 TypeScript 类型检查和源码跳转。
 - 开发环境使用可读的 `相对路径#导出名` 作为 Action ID，生产环境使用不透明的 Action ID。
 - 客户端与服务端通过标准 JSON RPC 通信。
+- 客户端可以统一拦截 Action 请求、响应和异常。
 - 客户端、服务端和共享 TypeScript 统一放在 `src`，由入口与依赖图决定运行位置。
 - `server-only` 显式标记服务端专有依赖，构建时阻止其进入客户端。
 - 开发模式同时提供 Vue HMR 和服务端热重建，并通过一个公开端口访问。
