@@ -1,4 +1,4 @@
-import { shallowRef } from 'vue'
+import { shallowRef, type Ref } from 'vue'
 import type { RpcFailure, RpcResponse, RpcSuccess } from './types.js'
 
 export class ServerActionError extends Error {
@@ -17,6 +17,7 @@ export type ClientServerAction = (...args: never[]) => unknown
 
 export interface ServerActionRequest<T> extends Promise<T> {
   readonly loading: boolean
+  bindLoading(loading: Ref<boolean>): this
 }
 
 export interface ServerActionRequestContext {
@@ -50,11 +51,30 @@ export interface ServerActionHooks {
 }
 
 let serverActionHooks: ServerActionHooks | undefined
+const loadingBindingCounts = new WeakMap<Ref<boolean>, number>()
 
 export function setServerActionHooks(
   hooks?: ServerActionHooks,
 ): void {
   serverActionHooks = hooks
+}
+
+function startLoading(binding: Ref<boolean>): void {
+  loadingBindingCounts.set(
+    binding,
+    (loadingBindingCounts.get(binding) ?? 0) + 1,
+  )
+  binding.value = true
+}
+
+function finishLoading(binding: Ref<boolean>): void {
+  const count = loadingBindingCounts.get(binding)!
+  if (count === 1) {
+    loadingBindingCounts.delete(binding)
+    binding.value = false
+    return
+  }
+  loadingBindingCounts.set(binding, count - 1)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -159,22 +179,42 @@ function createServerActionRequest<T>(
   execute: () => Promise<T>,
 ): ServerActionRequest<T> {
   const loading = shallowRef(false)
+  const bindings = new Set<Ref<boolean>>()
+  const activeBindings = new Set<Ref<boolean>>()
   let execution: Promise<T> | undefined
+
+  const activateBinding = (binding: Ref<boolean>) => {
+    if (activeBindings.has(binding)) {
+      return
+    }
+    activeBindings.add(binding)
+    startLoading(binding)
+  }
 
   const start = () => {
     if (!execution) {
       loading.value = true
+      bindings.forEach(activateBinding)
       execution = execute().finally(() => {
         loading.value = false
+        activeBindings.forEach(finishLoading)
+        activeBindings.clear()
       })
     }
     return execution
   }
 
-  return {
+  const request: ServerActionRequest<T> = {
     [Symbol.toStringTag]: 'ServerActionRequest',
     get loading() {
       return loading.value
+    },
+    bindLoading(binding) {
+      bindings.add(binding)
+      if (loading.value) {
+        activateBinding(binding)
+      }
+      return request
     },
     then(onfulfilled, onrejected) {
       return start().then(onfulfilled, onrejected)
@@ -186,6 +226,7 @@ function createServerActionRequest<T>(
       return start().finally(onfinally)
     },
   }
+  return request
 }
 
 export function callServerAction(

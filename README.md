@@ -108,6 +108,18 @@ request.loading // false，请求已经结束
 
 `request.loading` 是 Vue 可以追踪的响应式布尔值，只在本次请求执行期间为 `true`。第一次等待请求时才会执行；多次等待同一个请求只执行一次。
 
+也可以把请求状态绑定到页面已有的 Vue ref：
+
+```ts
+const loading = ref(false)
+
+async function add() {
+  count.value = await increment().bindLoading(loading)
+}
+```
+
+多个并发请求绑定同一个 ref 时，它会在全部请求结束后恢复为 `false`。
+
 `'use server'` 文件只能导出具名异步函数和 TypeScript 类型，不支持默认导出、重导出、导出变量或同步函数。
 
 ## 客户端 Action Hook

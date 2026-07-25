@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { effect, stop } from 'vue'
+import { effect, ref, stop } from 'vue'
 import {
   callServerAction,
   createServerReference,
@@ -27,6 +27,9 @@ describe('Server Action 客户端协议', () => {
     >('/_actions', 'action')
 
     const request = action()
+    const boundLoading = ref(false)
+    expect(request.bindLoading(boundLoading)).toBe(request)
+    request.bindLoading(boundLoading)
     const loading: boolean[] = []
     const runner = effect(() => {
       loading.push(request.loading)
@@ -35,9 +38,11 @@ describe('Server Action 客户端协议', () => {
     await Promise.resolve()
     expect(fetch).not.toHaveBeenCalled()
     expect(request.loading).toBe(false)
+    expect(boundLoading.value).toBe(false)
 
     const result = request.then((value) => value)
     expect(request.loading).toBe(true)
+    expect(boundLoading.value).toBe(true)
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce())
 
     resolveResponse(
@@ -45,6 +50,7 @@ describe('Server Action 客户端协议', () => {
     )
     await expect(result).resolves.toBe(1)
     expect(request.loading).toBe(false)
+    expect(boundLoading.value).toBe(false)
     expect(loading).toEqual([false, true, false])
     stop(runner)
   })
@@ -74,6 +80,42 @@ describe('Server Action 客户端协议', () => {
     expect(onResponse).toHaveBeenCalledOnce()
   })
 
+  test('并发请求绑定同一个 loading 时等待全部结束', async () => {
+    const responses: Array<(response: Response) => void> = []
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          responses.push(resolve)
+        }),
+    )
+    vi.stubGlobal('fetch', fetch)
+    const action = createServerReference<
+      () => Promise<number>
+    >('/_actions', 'action')
+    const loading = ref(false)
+    const first = action().bindLoading(loading)
+    const second = action().bindLoading(loading)
+
+    const firstResult = first.then((value) => value)
+    const secondResult = second.then((value) => value)
+    expect(loading.value).toBe(true)
+    await vi.waitFor(() => expect(responses).toHaveLength(2))
+
+    responses[0](
+      new Response(JSON.stringify({ ok: true, data: 1 })),
+    )
+    await expect(firstResult).resolves.toBe(1)
+    expect(first.loading).toBe(false)
+    expect(second.loading).toBe(true)
+    expect(loading.value).toBe(true)
+
+    responses[1](
+      new Response(JSON.stringify({ ok: true, data: 2 })),
+    )
+    await expect(secondResult).resolves.toBe(2)
+    expect(loading.value).toBe(false)
+  })
+
   test('失败请求结束 loading 并复用同一个异常', async () => {
     const expected = new Error('网络失败')
     const fetch = vi.fn().mockRejectedValue(expected)
@@ -82,9 +124,11 @@ describe('Server Action 客户端协议', () => {
       () => Promise<number>
     >('/_actions', 'action')
 
-    const request = action()
+    const loading = ref(false)
+    const request = action().bindLoading(loading)
     await expect(request).rejects.toBe(expected)
     expect(request.loading).toBe(false)
+    expect(loading.value).toBe(false)
     await expect(request).rejects.toBe(expected)
     expect(fetch).toHaveBeenCalledOnce()
   })

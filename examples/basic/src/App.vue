@@ -5,6 +5,7 @@ import { getCounter, incrementCounter, login, logout } from './actions'
 
 const count = ref<number | null>(null)
 const message = ref('')
+const loading = ref(false)
 
 onMounted(async () => {
   count.value = await getCounter()
@@ -22,7 +23,7 @@ async function handleLogout() {
 
 async function increment() {
   try {
-    count.value = await incrementCounter()
+    count.value = await incrementCounter().bindLoading(loading)
     message.value = ''
   } catch (error) {
     if (!(error instanceof ServerActionError)) {
@@ -42,6 +43,9 @@ async function increment() {
       <button @click="handleLogout">登出</button>
       <button @click="increment">+1</button>
     </div>
+    <p class="output">
+      请求状态：{{ loading ? '进行中' : '空闲' }}
+    </p>
     <p class="output">{{ message }}</p>
   </main>
 </template>
