@@ -120,6 +120,19 @@ dist/server  -> Fastify、Action 和服务端依赖
 └─ .gitignore                     Git 忽略规则
 ```
 
+## 文档网站
+
+`website/` 是独立 Git 仓库，推送其 `main` 分支后自动发布到 https://ministak.github.io/。
+
+```text
+pnpm --dir website dev
+pnpm --dir website build
+```
+
+## npm 发布
+
+更新两个包版本和模板依赖，完成测试与构建后，依次进入 `packages/core` 和 `packages/create-ministak` 执行 `npm publish`，最后从 npm 创建新项目验证。
+
 ## 常用命令
 
 统一使用 pnpm：
