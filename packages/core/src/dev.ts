@@ -43,6 +43,9 @@ import {
   resolveEnvironment,
   type EnvironmentMode,
 } from './env.js'
+import {
+  writeActionTypeDeclarations,
+} from './action-scanner.js'
 
 function normalizePath(file: string): string {
   return path.resolve(file.split('?')[0]).replaceAll('\\', '/')
@@ -277,6 +280,10 @@ async function buildClient(options: {
     transportKey: options.transportKey,
     actionPath: options.actionPath,
   })
+  await writeActionTypeDeclarations(
+    options.root,
+    await frameworkPlugin.ministak.refreshManifest(),
+  )
   const plugins = await createProjectPlugins(
     loaded.config,
     frameworkPlugin,
@@ -1146,6 +1153,10 @@ export async function createDevServer(
     development: true,
     serverEntry: frameworkConfig.serverEntry,
   })
+  await writeActionTypeDeclarations(
+    root,
+    await clientPlugin.ministak.refreshManifest(),
+  )
   const clientPlugins = await createProjectPlugins(
     clientViteConfig.config,
     clientPlugin,

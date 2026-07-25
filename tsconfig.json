@@ -11,6 +11,11 @@
     "isolatedModules": true,
     "allowArbitraryExtensions": true,
     "types": ["node", "vitest/globals", "vite/client"],
+    "rootDirs": [
+      ".",
+      "examples/basic",
+      "examples/basic/.ministak/action-types"
+    ],
     "baseUrl": ".",
     "paths": {
       "ministak": ["packages/core/src/index.ts"],
@@ -24,6 +29,7 @@
     "packages/**/*.ts",
     "examples/**/*.ts",
     "examples/**/*.vue",
+    "examples/basic/.ministak/action-types/**/*.ts",
     "tests/**/*.ts",
     "tests/**/*.vue",
     "vitest.config.ts"

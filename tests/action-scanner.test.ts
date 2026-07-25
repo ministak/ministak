@@ -6,6 +6,7 @@ import {
   ActionCompileError,
   createActionName,
   createActionTransportId,
+  createActionTypeSource,
   parseServerActionExports,
   scanServerActions,
 } from '../packages/core/src/action-scanner.js'
@@ -99,6 +100,48 @@ describe('Server Action 编译扫描', () => {
     expect(proxy).toContain(JSON.stringify(action.name))
     expect(proxy).not.toContain(
       createActionTransportId(transportKey, action.name),
+    )
+  })
+
+  test('生成保留泛型和相对导入的 Action 请求类型', () => {
+    const root = path.resolve('project')
+    const sourceFile = path.join(root, 'src/actions.ts')
+    const generatedFile = path.join(
+      root,
+      '.ministak/action-types/src/actions.ts.ts',
+    )
+    const source = `
+import type { Input } from './types'
+
+type Allowed = string | number
+
+export async function save<T extends Allowed>(input: Input<T>) {
+  return input.value
+}
+`
+    const output = createActionTypeSource({
+      source,
+      sourceFile,
+      generatedFile,
+      actions: [
+        {
+          name: 'src/actions.ts#save',
+          file: sourceFile,
+          relativeFile: 'src/actions.ts',
+          exportName: 'save',
+        },
+      ],
+    })
+
+    expect(output).toContain("from './types'")
+    expect(output).toContain(
+      'declare module "../../../src/actions"',
+    )
+    expect(output).toContain(
+      'function save<T extends Allowed>(',
+    )
+    expect(output).toContain(
+      'Parameters<typeof __MinistakOriginalAction0<T>>',
     )
   })
 

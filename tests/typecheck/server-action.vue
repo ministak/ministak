@@ -11,7 +11,9 @@ setServerActionHooks({
 })
 
 async function verifyServerActionTypes() {
-  const result = await incrementCounter()
+  const request = incrementCounter()
+  request.loading.valueOf()
+  const result = await request
   result.toFixed()
 
   // @ts-expect-error incrementCounter 不接受参数
@@ -19,6 +21,9 @@ async function verifyServerActionTypes() {
 
   // @ts-expect-error number 不存在 unknownField
   result.unknownField
+
+  // @ts-expect-error 普通 Promise 没有 loading
+  Promise.resolve().loading
 }
 
 void verifyServerActionTypes

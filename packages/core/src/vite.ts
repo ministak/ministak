@@ -4,6 +4,7 @@ import type { Plugin } from 'vite'
 import {
   createActionTransportId,
   scanServerActions,
+  writeActionTypeDeclarations,
 } from './action-scanner.js'
 import type { PageAppType } from './routing.js'
 import type { ActionDefinition, ActionManifest } from './types.js'
@@ -227,9 +228,11 @@ export function createMinistakPlugin(
   let serverEntry = path.resolve(root, options.serverEntry ?? 'src/server.ts')
   let manifest: ActionManifest = { actions: [] }
   let actionsByFile = new Map<string, ActionDefinition[]>()
+  let manifestRoot: string | undefined
 
   const refreshManifest = async (): Promise<ActionManifest> => {
     manifest = await scanServerActions(root)
+    manifestRoot = root
     actionsByFile = new Map()
     for (const action of manifest.actions) {
       const file = path.resolve(action.file)
@@ -251,7 +254,9 @@ export function createMinistakPlugin(
       root = path.resolve(options.root ?? resolved.root)
       sourceRoot = path.join(root, 'src')
       serverEntry = path.resolve(root, options.serverEntry ?? 'src/server.ts')
-      await refreshManifest()
+      if (manifestRoot !== root) {
+        await refreshManifest()
+      }
     },
 
     async resolveId(source, importer, resolveOptions) {
@@ -397,6 +402,7 @@ export function createMinistakPlugin(
         .map((action) => action.name)
         .sort()
       await refreshManifest()
+      await writeActionTypeDeclarations(root, manifest)
       const current = manifest.actions
         .map((action) => action.name)
         .sort()

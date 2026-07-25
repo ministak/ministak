@@ -21,6 +21,7 @@ Vue 客户端 SPA + Node/Fastify 服务端 + Server Action
 - 开发环境使用可读的 `相对路径#导出名` 作为 Action ID，生产环境使用不透明的 Action ID。
 - 客户端与服务端通过标准 JSON RPC 通信。
 - 客户端可以统一拦截 Action 请求、响应和异常。
+- 客户端 Action 在首次等待时执行，每次请求提供响应式 `loading` 状态。
 - 客户端、服务端和共享 TypeScript 统一放在 `src`，由入口与依赖图决定运行位置。
 - `server-only` 显式标记服务端专有依赖，构建时阻止其进入客户端。
 - 开发模式同时提供 Vue HMR 和服务端热重建，并通过一个公开端口访问。
@@ -72,7 +73,7 @@ dist/server  -> Fastify、Action 和服务端依赖
 │  │  │  ├─ config-loader.ts      配置加载
 │  │  │  ├─ env.ts                服务端环境变量加载
 │  │  │  ├─ types.ts              共享类型
-│  │  │  ├─ action-scanner.ts     Action 扫描与校验
+│  │  │  ├─ action-scanner.ts     Action 扫描、校验与请求类型生成
 │  │  │  ├─ client.ts             浏览器 RPC 客户端
 │  │  │  ├─ server.ts             Fastify 服务端运行时
 │  │  │  ├─ routing.ts            开发与生产共享的请求路由规则

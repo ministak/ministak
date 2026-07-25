@@ -88,7 +88,25 @@ async function add() {
 </template>
 ```
 
-客户端构建时，这些函数会被转换成异步 RPC 调用；服务端仍执行原函数。参数和返回值通过 JSON 传输。
+客户端构建时，这些函数会被转换成惰性 RPC 请求；服务端仍执行原函数。参数和返回值通过 JSON 传输。
+
+直接等待 Action 时，用法和普通异步函数一致：
+
+```ts
+const count = await increment()
+```
+
+需要请求状态时，可以先保留本次请求：
+
+```ts
+const request = increment()
+
+request.loading // false，请求尚未开始
+const count = await request
+request.loading // false，请求已经结束
+```
+
+`request.loading` 是 Vue 可以追踪的响应式布尔值，只在本次请求执行期间为 `true`。第一次等待请求时才会执行；多次等待同一个请求只执行一次。
 
 `'use server'` 文件只能导出具名异步函数和 TypeScript 类型，不支持默认导出、重导出、导出变量或同步函数。
 

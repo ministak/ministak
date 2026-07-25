@@ -8,7 +8,12 @@
     "isolatedModules": true,
     "allowArbitraryExtensions": true,
     "types": ["node", "vite/client"],
-    "lib": ["ES2024", "DOM", "DOM.Iterable"]
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "rootDirs": [".", ".ministak/action-types"]
   },
-  "include": ["src/**/*.ts", "src/**/*.vue"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    ".ministak/action-types/**/*.ts"
+  ]
 }

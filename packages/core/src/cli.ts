@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import path from 'node:path'
 import {
+  scanServerActions,
+  writeActionTypeDeclarations,
+} from './action-scanner.js'
+import {
   buildApplication,
   createDevServer,
   inspectApplication,
@@ -12,6 +16,11 @@ const [, , command = 'dev', rootArgument = '.'] = process.argv
 const root = path.resolve(process.cwd(), rootArgument)
 
 switch (command) {
+  case 'types': {
+    const manifest = await scanServerActions(root)
+    await writeActionTypeDeclarations(root, manifest)
+    break
+  }
   case 'build': {
     const result = await buildApplication({ root })
     console.log(`构建完成：${result.manifest.actions.length} 个 Server Action`)

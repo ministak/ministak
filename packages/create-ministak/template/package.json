@@ -9,7 +9,7 @@
     "build": "ministak build",
     "inspect": "ministak inspect",
     "start": "ministak start",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "ministak types && vue-tsc --noEmit"
   },
   "dependencies": {
     "ministak": "^0.1.0",

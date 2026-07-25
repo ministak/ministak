@@ -1,3 +1,4 @@
+import { shallowRef } from 'vue'
 import type { RpcFailure, RpcResponse, RpcSuccess } from './types.js'
 
 export class ServerActionError extends Error {
@@ -13,6 +14,10 @@ export class ServerActionError extends Error {
 }
 
 export type ClientServerAction = (...args: never[]) => unknown
+
+export interface ServerActionRequest<T> extends Promise<T> {
+  readonly loading: boolean
+}
 
 export interface ServerActionRequestContext {
   readonly action: ClientServerAction
@@ -94,11 +99,11 @@ async function readRpcResponse(response: Response): Promise<RpcResponse> {
   return value
 }
 
-export async function callServerAction(
+async function executeServerAction(
   actionPath: string,
   transportId: string,
   args: unknown[],
-  action: ClientServerAction = callServerAction as ClientServerAction,
+  action: ClientServerAction,
 ): Promise<unknown> {
   const hooks = serverActionHooks
   const request: ServerActionRequestContext = {
@@ -150,17 +155,63 @@ export async function callServerAction(
   }
 }
 
+function createServerActionRequest<T>(
+  execute: () => Promise<T>,
+): ServerActionRequest<T> {
+  const loading = shallowRef(false)
+  let execution: Promise<T> | undefined
+
+  const start = () => {
+    if (!execution) {
+      loading.value = true
+      execution = execute().finally(() => {
+        loading.value = false
+      })
+    }
+    return execution
+  }
+
+  return {
+    [Symbol.toStringTag]: 'ServerActionRequest',
+    get loading() {
+      return loading.value
+    },
+    then(onfulfilled, onrejected) {
+      return start().then(onfulfilled, onrejected)
+    },
+    catch(onrejected) {
+      return start().catch(onrejected)
+    },
+    finally(onfinally) {
+      return start().finally(onfinally)
+    },
+  }
+}
+
+export function callServerAction(
+  actionPath: string,
+  transportId: string,
+  args: unknown[],
+  action: ClientServerAction = callServerAction as ClientServerAction,
+): ServerActionRequest<unknown> {
+  return createServerActionRequest(() =>
+    executeServerAction(actionPath, transportId, args, action),
+  )
+}
+
 export function createServerReference<T extends (...args: never[]) => unknown>(
   actionPath: string,
   transportId: string,
-): (...args: Parameters<T>) => Promise<Awaited<ReturnType<T>>> {
+): (
+  ...args: Parameters<T>
+) => ServerActionRequest<Awaited<ReturnType<T>>> {
   const action = (...args: Parameters<T>) =>
     callServerAction(
       actionPath,
       transportId,
       args,
       action as ClientServerAction,
-    ) as Promise<
+    ) as ServerActionRequest<
       Awaited<ReturnType<T>>
     >
   return action

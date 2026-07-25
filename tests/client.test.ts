@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { effect, stop } from 'vue'
 import {
   callServerAction,
   createServerReference,
@@ -12,6 +13,82 @@ afterEach(() => {
 })
 
 describe('Server Action 客户端协议', () => {
+  test('请求在首次等待时执行并响应式更新 loading', async () => {
+    let resolveResponse!: (response: Response) => void
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveResponse = resolve
+        }),
+    )
+    vi.stubGlobal('fetch', fetch)
+    const action = createServerReference<
+      () => Promise<number>
+    >('/_actions', 'action')
+
+    const request = action()
+    const loading: boolean[] = []
+    const runner = effect(() => {
+      loading.push(request.loading)
+    })
+
+    await Promise.resolve()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(request.loading).toBe(false)
+
+    const result = request.then((value) => value)
+    expect(request.loading).toBe(true)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+
+    resolveResponse(
+      new Response(JSON.stringify({ ok: true, data: 1 })),
+    )
+    await expect(result).resolves.toBe(1)
+    expect(request.loading).toBe(false)
+    expect(loading).toEqual([false, true, false])
+    stop(runner)
+  })
+
+  test('同一个请求并发和重复等待只执行一次', async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, data: 1 })),
+    )
+    vi.stubGlobal('fetch', fetch)
+    const onRequest = vi.fn()
+    const onResponse = vi.fn(({ data }) => data)
+    setServerActionHooks({ onRequest, onResponse })
+    const action = createServerReference<
+      () => Promise<number>
+    >('/_actions', 'action')
+
+    const request = action()
+    expect(request.loading).toBe(false)
+    expect(onRequest).not.toHaveBeenCalled()
+    const results = await Promise.all([request, request])
+
+    expect(results).toEqual([1, 1])
+    expect(await request).toBe(1)
+    expect(request.loading).toBe(false)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(onRequest).toHaveBeenCalledOnce()
+    expect(onResponse).toHaveBeenCalledOnce()
+  })
+
+  test('失败请求结束 loading 并复用同一个异常', async () => {
+    const expected = new Error('网络失败')
+    const fetch = vi.fn().mockRejectedValue(expected)
+    vi.stubGlobal('fetch', fetch)
+    const action = createServerReference<
+      () => Promise<number>
+    >('/_actions', 'action')
+
+    const request = action()
+    await expect(request).rejects.toBe(expected)
+    expect(request.loading).toBe(false)
+    await expect(request).rejects.toBe(expected)
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   test('拒绝 Fastify 原生错误结构', async () => {
     vi.stubGlobal(
       'fetch',
