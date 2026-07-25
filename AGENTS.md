@@ -111,7 +111,7 @@ dist/server  -> Fastify、Action 和服务端依赖
 │  └─ integration.test.ts         构建与热更新集成测试
 ├─ AGENTS.md                      项目概览和接手入口
 ├─ README.md                      项目使用说明
-├─ LICENSE                        MIT 许可证
+├─ LICENSE                        Ministak 软件许可证
 ├─ package.json                   工作区命令和依赖
 ├─ pnpm-workspace.yaml            工作区范围
 ├─ pnpm-lock.yaml                 依赖锁定
