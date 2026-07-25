@@ -1,6 +1,6 @@
 {
   "name": "ministak",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "轻量的 Vue 全栈框架：客户端 SPA、Fastify 服务端与 Server Action",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Ministak",
