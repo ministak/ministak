@@ -8,4 +8,6 @@ export default defineConfig({
   target: 'node24',
   clean: true,
   splitting: false,
+  minify: true,
+  sourcemap: false,
 })

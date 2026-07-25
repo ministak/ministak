@@ -19,6 +19,26 @@ const creatorRoot = path.join(repositoryRoot, 'packages/create-ministak')
 const temporaryDirectories: string[] = []
 const children: ChildProcess[] = []
 
+async function expectMinifiedPackage(
+  directory: string,
+  internalNames: string[],
+): Promise<void> {
+  const files = await readdir(directory)
+  expect(files.some((file) => file.endsWith('.map'))).toBe(false)
+
+  const javascript = files.filter((file) => file.endsWith('.js'))
+  expect(javascript.length).toBeGreaterThan(0)
+  let output = ''
+  for (const file of javascript) {
+    const code = await readFile(path.join(directory, file), 'utf8')
+    expect(code).not.toContain('sourceMappingURL')
+    output += code
+  }
+  for (const name of internalNames) {
+    expect(output).not.toContain(name)
+  }
+}
+
 async function expectedCoreVersion(): Promise<string> {
   const packageJson = JSON.parse(
     await readFile(path.join(coreRoot, 'package.json'), 'utf8'),
@@ -125,6 +145,19 @@ afterEach(async () => {
 })
 
 describe('创建项目', () => {
+  test('npm 包使用压缩代码且不包含源码映射', async () => {
+    await expectMinifiedPackage(path.join(coreRoot, 'dist'), [
+      'encodeActionArguments',
+      'readRpcResponse',
+      'registerActionRoute',
+      'createServerEntryModule',
+    ])
+    await expectMinifiedPackage(path.join(creatorRoot, 'dist'), [
+      'validateProjectName',
+      'copyTemplate',
+    ])
+  })
+
   test('复制模板、写入项目名并使用 ministak 依赖', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'create-ministak-'))
     temporaryDirectories.push(root)
@@ -228,6 +261,20 @@ describe('创建项目', () => {
       ),
     ) as { name: string }
     expect(installedCore.name).toBe('ministak')
+    const installedFiles = await readdir(
+      path.join(projectRoot, 'node_modules/ministak'),
+    )
+    expect(installedFiles).toEqual(
+      expect.arrayContaining([
+        'LICENSE',
+        'README.md',
+        'dist',
+        'package.json',
+      ]),
+    )
+    expect(installedFiles).not.toEqual(
+      expect.arrayContaining(['src', 'tests', 'tsup.config.ts']),
+    )
     const installedServerOnly = JSON.parse(
       await readFile(
         path.join(projectRoot, 'node_modules/server-only/package.json'),
