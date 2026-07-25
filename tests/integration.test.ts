@@ -17,7 +17,16 @@ import {
   createDevServer,
   inspectApplication,
 } from '../packages/core/src/dev.js'
-import type { RpcResponse } from '../packages/core/src/types.js'
+import {
+  createServerReference,
+  fileStream,
+  fileStreams,
+} from '../packages/core/src/client.js'
+import type {
+  FileStream,
+  FileStreams,
+  RpcResponse,
+} from '../packages/core/src/types.js'
 import { createMinistakPlugin } from '../packages/core/src/vite.js'
 
 const repositoryRoot = path.resolve(import.meta.dirname, '..')
@@ -326,6 +335,143 @@ describe('生产构建和 HTTP 调用', () => {
       cookie: clearedCookie,
     })
     expect(deniedAfterLogout.response.status).toBe(401)
+  })
+
+  test('生产构建后的 Server Action 支持内存文件和文件流', async () => {
+    const projectRoot = path.join(testProjectsRoot, 'file-action')
+    await mkdir(testProjectsRoot, { recursive: true })
+    await cp(exampleRoot, projectRoot, {
+      recursive: true,
+      filter: (source) =>
+        !source.includes(`${path.sep}node_modules`) &&
+        !source.includes(`${path.sep}dist`) &&
+        !source.includes(`${path.sep}.ministak`),
+    })
+    const actionName = 'src/upload.ts#inspectUpload'
+    await writeFile(
+      path.join(projectRoot, 'src/upload.ts'),
+      `'use server'
+import type { FileStream, FileStreams } from 'ministak'
+
+export async function inspectUpload(
+  memory: File[],
+  single: FileStream,
+  many: FileStreams,
+) {
+  const singleContent = await new Response(single.stream).text()
+  const streamed = []
+  for await (const file of many) {
+    streamed.push({
+      name: file.name,
+      type: file.type,
+      content: await new Response(file.stream).text(),
+    })
+  }
+  return {
+    marker: 'SERVER_FILE_ACTION',
+    memory: await Promise.all(memory.map(async (file) => ({
+      name: file.name,
+      type: file.type,
+      lastModified: file.lastModified,
+      content: await file.text(),
+    }))),
+    single: {
+      name: single.name,
+      type: single.type,
+      content: singleContent,
+    },
+    many: streamed,
+  }
+}
+`,
+      'utf8',
+    )
+    const mainFile = path.join(projectRoot, 'src/main.ts')
+    await writeFile(
+      mainFile,
+      `${await readFile(mainFile, 'utf8')}
+import { inspectUpload } from './upload'
+console.log(inspectUpload)
+`,
+      'utf8',
+    )
+
+    const built = await buildApplication({ root: projectRoot })
+    expect(
+      built.manifest.actions.some((action) => action.name === actionName),
+    ).toBe(true)
+    const transportId = await readBuiltTransportId(
+      built.outDir,
+      actionName,
+    )
+    const clientOutput = await readClientOutput(projectRoot)
+    expect(clientOutput).toContain(transportId)
+    expect(clientOutput).not.toContain(actionName)
+    expect(clientOutput).not.toContain('SERVER_FILE_ACTION')
+
+    const server = await startBuiltServer(projectRoot)
+    const action = createServerReference<
+      (
+        memory: File[],
+        single: FileStream,
+        many: FileStreams,
+      ) => Promise<{
+        marker: string
+        memory: unknown[]
+        single: unknown
+        many: unknown[]
+      }>
+    >(`${server.url}${built.actionPath}`, transportId)
+    const result = await action(
+      [
+        new File(['memory'], 'memory.json', {
+          type: 'application/json',
+          lastModified: 123,
+        }),
+      ],
+      fileStream(
+        new File(['single'], 'single.txt', {
+          type: 'text/plain',
+        }),
+      ),
+      fileStreams([
+        new File(['first'], 'first.txt', {
+          type: 'text/plain',
+        }),
+        new File(['second'], 'second.json', {
+          type: 'application/json',
+        }),
+      ]),
+    )
+
+    expect(result).toEqual({
+      marker: 'SERVER_FILE_ACTION',
+      memory: [
+        {
+          name: 'memory.json',
+          type: 'application/json',
+          lastModified: 123,
+          content: 'memory',
+        },
+      ],
+      single: {
+        name: 'single.txt',
+        type: 'text/plain',
+        content: 'single',
+      },
+      many: [
+        {
+          name: 'first.txt',
+          type: 'text/plain',
+          content: 'first',
+        },
+        {
+          name: 'second.json',
+          type: 'application/json',
+          content: 'second',
+        },
+      ],
+    })
   })
 
   test('客户端依赖链触及 server-only 时构建失败', async () => {

@@ -125,7 +125,11 @@ export function parseServerActionExports(code: string, file: string): string[] {
     }
 
     const declaration = statement.declaration
-    if (!declaration.id || !declaration.async) {
+    if (
+      !declaration.id ||
+      !declaration.async ||
+      declaration.generator
+    ) {
       throw new ActionCompileError(
         "'use server' 文件只能导出具名异步函数",
         file,

@@ -8,6 +8,7 @@ import {
   ServerActionError,
   setServerActionHooks,
 } from '../packages/core/src/client.js'
+import type { FileStreams } from '../packages/core/src/types.js'
 
 afterEach(() => {
   setServerActionHooks()
@@ -30,6 +31,7 @@ describe('Server Action 客户端协议', () => {
 
     const request = action()
     const boundLoading = ref(false)
+    const lateLoading = ref(false)
     expect(request.bindLoading(boundLoading)).toBe(request)
     request.bindLoading(boundLoading)
     const loading: boolean[] = []
@@ -42,9 +44,12 @@ describe('Server Action 客户端协议', () => {
     expect(request.loading).toBe(false)
     expect(boundLoading.value).toBe(false)
 
-    const result = request.then((value) => value)
+    const onFinally = vi.fn()
+    const result = request.finally(onFinally)
     expect(request.loading).toBe(true)
     expect(boundLoading.value).toBe(true)
+    request.bindLoading(lateLoading)
+    expect(lateLoading.value).toBe(true)
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce())
 
     resolveResponse(
@@ -53,6 +58,8 @@ describe('Server Action 客户端协议', () => {
     await expect(result).resolves.toBe(1)
     expect(request.loading).toBe(false)
     expect(boundLoading.value).toBe(false)
+    expect(lateLoading.value).toBe(false)
+    expect(onFinally).toHaveBeenCalledOnce()
     expect(loading).toEqual([false, true, false])
     stop(runner)
   })
@@ -128,7 +135,9 @@ describe('Server Action 客户端协议', () => {
 
     const loading = ref(false)
     const request = action().bindLoading(loading)
-    await expect(request).rejects.toBe(expected)
+    await expect(request.catch((error) => error)).resolves.toBe(
+      expected,
+    )
     expect(request.loading).toBe(false)
     expect(loading.value).toBe(false)
     await expect(request).rejects.toBe(expected)
@@ -229,6 +238,15 @@ describe('Server Action 客户端协议', () => {
       string,
       RequestInit,
     ]
+    expect(fetch.mock.calls[0][0]).toBe('/_actions')
+    expect(init.method).toBe('POST')
+    expect(init.credentials).toBe('same-origin')
+    expect(new Headers(init.headers).get('content-type')).toBe(
+      'application/json',
+    )
+    expect(new Headers(init.headers).get('x-action-id')).toBe(
+      'action',
+    )
     expect(new Headers(init.headers).get('authorization')).toBe(
       'Bearer token',
     )
@@ -300,6 +318,70 @@ describe('Server Action 客户端协议', () => {
       'first.txt',
       'second.txt',
     ])
+    expect(metadata.files[0].parts[0]).toEqual({
+      id: '0',
+      name: 'memory.txt',
+      type: 'text/plain',
+      lastModified: 1,
+    })
+  })
+
+  test('请求 Hook 增加文件参数后仍会切换为 multipart', async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true })),
+    )
+    vi.stubGlobal('fetch', fetch)
+    setServerActionHooks({
+      onRequest(context) {
+        context.args = [new File(['content'], 'hook.txt')]
+      },
+    })
+
+    await callServerAction('/_actions', 'action', [])
+
+    const [, init] = fetch.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBeInstanceOf(FormData)
+    expect(new Headers(init.headers).has('content-type')).toBe(false)
+  })
+
+  test('参数序列化失败会结束 loading 并进入错误 Hook', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const loading = ref(false)
+    let receivedResponse: Response | undefined
+    setServerActionHooks({
+      onError({ error, response }) {
+        expect(error).toBeInstanceOf(TypeError)
+        receivedResponse = response
+        return 'recovered'
+      },
+    })
+    const action = createServerReference<
+      (value: bigint) => Promise<string>
+    >('/_actions', 'action')
+    const request = action(1n).bindLoading(loading)
+
+    await expect(request).resolves.toBe('recovered')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(receivedResponse).toBeUndefined()
+    expect(request.loading).toBe(false)
+    expect(loading.value).toBe(false)
+  })
+
+  test('文件流包装器拒绝无效输入', async () => {
+    expect(() => fileStream({} as File)).toThrow(TypeError)
+    expect(() => fileStreams(null as never)).toThrow(TypeError)
+
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const action = createServerReference<
+      (files: FileStreams) => Promise<void>
+    >('/_actions', 'action')
+
+    await expect(
+      action(fileStreams([{} as File])),
+    ).rejects.toThrow(TypeError)
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   test('响应 Hook 的返回值替换 Action 结果', async () => {

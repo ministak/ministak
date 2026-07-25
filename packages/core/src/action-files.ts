@@ -143,11 +143,38 @@ function isFilePart(part: Multipart): part is MultipartFile {
   return part.type === 'file'
 }
 
+function multipartError(error: unknown): Error {
+  if (
+    error instanceof ActionRequestError ||
+    (isRecord(error) &&
+      typeof error.code === 'string' &&
+      [
+        'FST_REQ_FILE_TOO_LARGE',
+        'FST_PARTS_LIMIT',
+        'FST_FILES_LIMIT',
+        'FST_FIELDS_LIMIT',
+      ].includes(error.code))
+  ) {
+    return error as Error
+  }
+  return invalidArguments()
+}
+
+async function nextMultipartPart(
+  iterator: AsyncIterableIterator<Multipart>,
+): Promise<IteratorResult<Multipart>> {
+  try {
+    return await iterator.next()
+  } catch (error) {
+    throw multipartError(error)
+  }
+}
+
 async function nextFilePart(
   iterator: AsyncIterableIterator<Multipart>,
   expected: ActionFilePart,
 ): Promise<MultipartFile> {
-  const result = await iterator.next()
+  const result = await nextMultipartPart(iterator)
   if (result.done || !isFilePart(result.value)) {
     throw invalidArguments()
   }
@@ -169,17 +196,21 @@ async function readMemoryFile(
   const part = await nextFilePart(iterator, expected)
   const chunks: Uint8Array[] = []
   let limitError: Error | undefined
-  for await (const chunk of part.file) {
-    const bytes = chunk as Uint8Array
-    if (!limitError) {
-      try {
-        budget.add(bytes.byteLength)
-        chunks.push(bytes)
-      } catch (error) {
-        limitError = error as Error
-        chunks.length = 0
+  try {
+    for await (const chunk of part.file) {
+      const bytes = chunk as Uint8Array
+      if (!limitError) {
+        try {
+          budget.add(bytes.byteLength)
+          chunks.push(bytes)
+        } catch (error) {
+          limitError = error as Error
+          chunks.length = 0
+        }
       }
     }
+  } catch (error) {
+    throw multipartError(error)
   }
   if (limitError) {
     throw limitError
@@ -374,11 +405,15 @@ class StreamCoordinator {
             complete(error)
           },
         )
-        part.file.on('error', (error) => sink?.destroy(error))
+        part.file.on('error', (error) =>
+          sink?.destroy(multipartError(error)),
+        )
         part.file.pipe(sink)
       } catch (error) {
         complete(error as Error)
-        output.destroy(error as Error)
+        output.destroy(
+          skipRequested ? undefined : (error as Error),
+        )
       }
     })()
 
@@ -412,7 +447,7 @@ class StreamCoordinator {
     }
     if (!this.ended) {
       this.ended = true
-      const extra = await this.iterator.next()
+      const extra = await nextMultipartPart(this.iterator)
       if (!extra.done) {
         if (isFilePart(extra.value)) {
           extra.value.file.resume()
@@ -604,13 +639,18 @@ export async function readActionMultipart(
     throw payloadTooLarge()
   }
 
-  const iterator = request.parts({
-    limits: {
-      fieldSize: bodyLimit,
-      fileSize: bodyLimit,
-    },
-  })
-  const first = await iterator.next()
+  let iterator: AsyncIterableIterator<Multipart>
+  try {
+    iterator = request.parts({
+      limits: {
+        fieldSize: bodyLimit,
+        fileSize: bodyLimit,
+      },
+    })
+  } catch (error) {
+    throw multipartError(error)
+  }
+  const first = await nextMultipartPart(iterator)
   if (
     first.done ||
     first.value.type !== 'field' ||

@@ -44,7 +44,10 @@ describe('Server Action 编译扫描', () => {
     ["'use server'; export default async function run() {}", '默认导出'],
     ["'use server'; export const run = async () => {}", '具名异步函数'],
     ["'use server'; export function run() {}", '具名异步函数'],
+    ["'use server'; export async function* run() {}", '具名异步函数'],
     ["'use server'; export { run } from './run'", '重导出'],
+    ["'use server'; export * from './run'", 'export \\*'],
+    ["'use server'; export type Result = string", '至少需要导出'],
   ])('拒绝不受支持的导出：%s', (code, message) => {
     expect(() => parseServerActionExports(code, 'invalid.ts')).toThrowError(
       new RegExp(message),
@@ -224,4 +227,53 @@ export async function save<T extends Allowed>(input: Input<T>) {
       expect(send).not.toHaveBeenCalled()
     },
   )
+
+  test('Action 导出变化时刷新清单并触发客户端重载', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ministak-hmr-'))
+    temporaryDirectories.push(root)
+    await mkdir(path.join(root, 'src'), { recursive: true })
+    const file = path.join(root, 'src/action.ts')
+    await writeFile(
+      file,
+      "'use server'\nexport async function first() {}\n",
+      'utf8',
+    )
+    const plugin = createMinistakPlugin({
+      root,
+      target: 'client',
+      transportKey,
+      actionPath: '/_actions',
+      development: true,
+    })
+    await plugin.ministak.refreshManifest()
+    const updated =
+      "'use server'\nexport async function first() {}\n" +
+      'export async function second() {}\n'
+    await writeFile(file, updated, 'utf8')
+    const send = vi.fn()
+    const hotUpdate = plugin.hotUpdate
+    if (typeof hotUpdate !== 'function') {
+      throw new Error('客户端插件没有注册 Vite 8 hotUpdate 钩子')
+    }
+
+    const result = await hotUpdate.call(
+      { environment: { name: 'client', hot: { send } } } as never,
+      {
+        type: 'update',
+        file,
+        timestamp: Date.now(),
+        modules: [],
+        read: () => updated,
+        server: {},
+      } as never,
+    )
+
+    expect(result).toEqual([])
+    expect(plugin.ministak.getManifest().actions).toHaveLength(2)
+    expect(send).toHaveBeenCalledWith({
+      type: 'full-reload',
+      path: '*',
+      triggeredBy: file,
+    })
+  })
 })
