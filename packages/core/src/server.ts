@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import fastifyMultipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
 import {
   type FastifyInstance,
@@ -12,6 +13,11 @@ import type {
   ActionRegistry,
   RpcFailure,
 } from './types.js'
+import {
+  ActionRequestError,
+  type ActionFileSession,
+  readActionMultipart,
+} from './action-files.js'
 import {
   DEV_ROUTE_MISS_HEADER,
   isSpaFallbackRequest,
@@ -81,9 +87,18 @@ function sendActionError(
       .code(error.statusCode)
       .send(failure(error.code, error.message, requestId))
   }
+  if (error instanceof ActionRequestError) {
+    return reply
+      .code(error.statusCode)
+      .send(failure(error.code, error.message, requestId))
+  }
 
   switch (fastifyErrorCode(error)) {
     case 'FST_ERR_CTP_BODY_TOO_LARGE':
+    case 'FST_REQ_FILE_TOO_LARGE':
+    case 'FST_PARTS_LIMIT':
+    case 'FST_FILES_LIMIT':
+    case 'FST_FIELDS_LIMIT':
       return reply
         .code(413)
         .send(failure('PAYLOAD_TOO_LARGE', '请求体过大', requestId))
@@ -111,84 +126,135 @@ interface RegisterActionRouteOptions {
   actionRegistry: ActionRegistry
 }
 
+async function finishFileSession(
+  session: ActionFileSession | undefined,
+  actionFailed: boolean,
+  request: FastifyRequest,
+): Promise<void> {
+  if (!session) {
+    return
+  }
+  try {
+    await session.finish()
+  } catch (error) {
+    if (!actionFailed) {
+      throw error
+    }
+    request.log.error(
+      { err: error, actionName: request.serverAction?.name },
+      'Server Action 文件流清理失败',
+    )
+  }
+}
+
 function registerActionRoute(
   app: FastifyInstance,
   options: RegisterActionRouteOptions,
 ): void {
-  app.post(
-    options.actionPath,
-    {
-      errorHandler(error, request, reply) {
-        sendActionError(error, request, reply)
+  app.register(async (actionApp) => {
+    if (!actionApp.hasRequestDecorator('parts')) {
+      await actionApp.register(fastifyMultipart)
+    }
+    actionApp.post(
+      options.actionPath,
+      {
+        errorHandler(error, request, reply) {
+          sendActionError(error, request, reply)
+        },
       },
-    },
-    async (request, reply) => {
-      reply.header('cache-control', 'no-cache, no-store, max-age=0')
-      const requestId = String(request.id)
+      async (request, reply) => {
+        reply.header('cache-control', 'no-cache, no-store, max-age=0')
+        const requestId = String(request.id)
+        let fileSession: ActionFileSession | undefined
 
-      try {
-        const contentType = getHeader(request, 'content-type')
-        if (!contentType?.toLowerCase().startsWith('application/json')) {
-          throw new ActionError('Server Action 只接受 JSON 请求', {
-            code: 'UNSUPPORTED_CONTENT_TYPE',
-            status: 415,
-          })
+        try {
+          const contentType = getHeader(
+            request,
+            'content-type',
+          )?.toLowerCase()
+          if (
+            !contentType?.startsWith('application/json') &&
+            !contentType?.startsWith('multipart/form-data')
+          ) {
+            throw new ActionError('Server Action 请求类型不受支持', {
+              code: 'UNSUPPORTED_CONTENT_TYPE',
+              status: 415,
+            })
+          }
+
+          const transportId = getHeader(request, 'x-action-id')
+          if (!transportId) {
+            throw new ActionError('缺少 Action ID', {
+              code: 'ACTION_ID_REQUIRED',
+            })
+          }
+
+          const action = options.actionRegistry[transportId]
+          if (!action) {
+            throw new ActionError('Server Action 不存在', {
+              code: 'ACTION_NOT_FOUND',
+              status: 404,
+            })
+          }
+
+          let args: unknown
+          if (contentType.startsWith('multipart/form-data')) {
+            fileSession = await readActionMultipart(request)
+            args = fileSession.args
+          } else {
+            const body = request.body
+            if (
+              typeof body !== 'object' ||
+              body === null ||
+              !('args' in body)
+            ) {
+              throw new ActionError('Action 参数格式错误', {
+                code: 'INVALID_ARGUMENTS',
+              })
+            }
+            args = (body as { args: unknown }).args
+          }
+
+          if (!Array.isArray(args)) {
+            throw new ActionError('Action 参数必须是数组', {
+              code: 'INVALID_ARGUMENTS',
+            })
+          }
+
+          const handler = await action.load()
+          if (typeof handler !== 'function') {
+            throw new Error(`Action ${action.name} 没有导出函数`)
+          }
+
+          const context: ActionContext = {
+            request,
+            reply,
+            actionName: action.name,
+            requestId,
+          }
+
+          let result: unknown
+          let actionError: unknown
+          let actionFailed = false
+          try {
+            result = await actionStorage.run(context, () =>
+              handler(...args),
+            )
+          } catch (error) {
+            actionFailed = true
+            actionError = error
+          }
+          await finishFileSession(fileSession, actionFailed, request)
+          if (actionFailed) {
+            throw actionError
+          }
+          return { ok: true, data: result }
+        } catch (error) {
+          return sendActionError(error, request, reply)
         }
-
-        const transportId = getHeader(request, 'x-action-id')
-        if (!transportId) {
-          throw new ActionError('缺少 Action ID', {
-            code: 'ACTION_ID_REQUIRED',
-          })
-        }
-
-        const action = options.actionRegistry[transportId]
-        if (!action) {
-          throw new ActionError('Server Action 不存在', {
-            code: 'ACTION_NOT_FOUND',
-            status: 404,
-          })
-        }
-
-        const body = request.body
-        if (
-          typeof body !== 'object' ||
-          body === null ||
-          !('args' in body)
-        ) {
-          throw new ActionError('Action 参数格式错误', {
-            code: 'INVALID_ARGUMENTS',
-          })
-        }
-
-        const args = (body as { args: unknown }).args
-        if (!Array.isArray(args)) {
-          throw new ActionError('Action 参数必须是数组', {
-            code: 'INVALID_ARGUMENTS',
-          })
-        }
-
-        const handler = await action.load()
-        if (typeof handler !== 'function') {
-          throw new Error(`Action ${action.name} 没有导出函数`)
-        }
-
-        const context: ActionContext = {
-          request,
-          reply,
-          actionName: action.name,
-          requestId,
-        }
-
-        const result = await actionStorage.run(context, () =>
-          handler(...args),
-        )
-        return { ok: true, data: result }
-      } catch (error) {
-        return sendActionError(error, request, reply)
-      }
-    },
-  )
+      },
+    )
+  })
 }
 
 export interface CreateFrameworkAppOptions {

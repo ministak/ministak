@@ -15,6 +15,7 @@
     "typecheck": "tsx packages/core/src/cli.ts types examples/basic && vue-tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
+    "@fastify/multipart": "^9.3.0",
     "@types/node": "^24.10.0",
     "@vitejs/plugin-vue": "^6.0.5",
     "fastify": "^5.10.0",

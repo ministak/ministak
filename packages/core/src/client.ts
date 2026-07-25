@@ -1,5 +1,17 @@
 import { shallowRef, type Ref } from 'vue'
-import type { RpcFailure, RpcResponse, RpcSuccess } from './types.js'
+import {
+  ACTION_MULTIPART_FILE_PREFIX,
+  ACTION_MULTIPART_METADATA_FIELD,
+  type ActionFileDescriptor,
+  type ActionFilePart,
+} from './action-protocol.js'
+import type {
+  FileStream,
+  FileStreams,
+  RpcFailure,
+  RpcResponse,
+  RpcSuccess,
+} from './types.js'
 
 export class ServerActionError extends Error {
   constructor(
@@ -53,6 +65,57 @@ export interface ServerActionHooks {
 let serverActionHooks: ServerActionHooks | undefined
 const loadingBindingCounts = new WeakMap<Ref<boolean>, number>()
 
+class ClientFileStream implements FileStream {
+  readonly name: string
+  readonly type: string
+
+  constructor(readonly source: File) {
+    this.name = source.name
+    this.type = source.type
+  }
+
+  get stream(): ReadableStream<Uint8Array> {
+    return this.source.stream()
+  }
+
+  async skip(): Promise<void> {
+    await this.stream.cancel()
+  }
+}
+
+class ClientFileStreams implements FileStreams {
+  constructor(readonly source: Iterable<File>) {}
+
+  async *[Symbol.asyncIterator](): AsyncIterator<FileStream> {
+    for (const file of this.source) {
+      assertFile(file)
+      yield new ClientFileStream(file)
+    }
+  }
+
+  async skip(): Promise<void> {
+    for await (const file of this) {
+      await file.skip()
+    }
+  }
+}
+
+export function fileStream(file: File): FileStream {
+  assertFile(file)
+  return new ClientFileStream(file)
+}
+
+export function fileStreams(files: Iterable<File>): FileStreams {
+  if (
+    !files ||
+    typeof files !== 'object' ||
+    typeof files[Symbol.iterator] !== 'function'
+  ) {
+    throw new TypeError('fileStreams() 只接受可迭代的 File 集合')
+  }
+  return new ClientFileStreams(files)
+}
+
 export function setServerActionHooks(
   hooks?: ServerActionHooks,
 ): void {
@@ -97,6 +160,113 @@ function isRpcFailure(value: unknown): value is RpcFailure {
   )
 }
 
+function assertFile(value: unknown): asserts value is File {
+  if (typeof File === 'undefined' || !(value instanceof File)) {
+    throw new TypeError('文件参数必须是 File')
+  }
+}
+
+interface EncodedFilePart {
+  metadata: ActionFilePart
+  file: File
+}
+
+function encodeActionArguments(args: unknown[]): string | FormData {
+  const descriptors: ActionFileDescriptor[] = []
+  const memoryParts: EncodedFilePart[] = []
+  const streamParts: EncodedFilePart[] = []
+  const paths = new WeakMap<object, Array<string | number>>()
+  let partIndex = 0
+  let root = true
+
+  const createPart = (file: File): EncodedFilePart => ({
+    metadata: {
+      id: String(partIndex++),
+      name: file.name,
+      type: file.type,
+      lastModified: file.lastModified,
+    },
+    file,
+  })
+
+  const argsJson = JSON.stringify(args, function (key, value) {
+    if (root) {
+      root = false
+      if (typeof value === 'object' && value !== null) {
+        paths.set(value, [])
+      }
+      return value
+    }
+
+    const parentPath = paths.get(this as object)
+    if (!parentPath) {
+      return value
+    }
+    const path = [
+      ...parentPath,
+      Array.isArray(this) ? Number(key) : key,
+    ]
+
+    if (value instanceof ClientFileStream) {
+      const part = createPart(value.source)
+      streamParts.push(part)
+      descriptors.push({
+        kind: 'stream',
+        path,
+        parts: [part.metadata],
+      })
+      return null
+    }
+
+    if (value instanceof ClientFileStreams) {
+      const parts: EncodedFilePart[] = []
+      for (const file of value.source) {
+        assertFile(file)
+        parts.push(createPart(file))
+      }
+      streamParts.push(...parts)
+      descriptors.push({
+        kind: 'streams',
+        path,
+        parts: parts.map((part) => part.metadata),
+      })
+      return null
+    }
+
+    if (typeof File !== 'undefined' && value instanceof File) {
+      const part = createPart(value)
+      memoryParts.push(part)
+      descriptors.push({
+        kind: 'file',
+        path,
+        parts: [part.metadata],
+      })
+      return null
+    }
+
+    if (typeof value === 'object' && value !== null) {
+      paths.set(value, path)
+    }
+    return value
+  })
+
+  if (descriptors.length === 0) {
+    return argsJson
+  }
+
+  const metadata = `{"args":${argsJson},"files":${JSON.stringify(descriptors)}}`
+  const body = new FormData()
+  body.append(ACTION_MULTIPART_METADATA_FIELD, metadata)
+  for (const part of [...memoryParts, ...streamParts]) {
+    body.append(
+      `${ACTION_MULTIPART_FILE_PREFIX}${part.metadata.id}`,
+      part.file,
+      part.metadata.name,
+    )
+  }
+  return body
+}
+
 async function readRpcResponse(response: Response): Promise<RpcResponse> {
   let value: unknown
   try {
@@ -130,7 +300,6 @@ async function executeServerAction(
     action,
     args,
     headers: new Headers({
-      'content-type': 'application/json',
       'x-action-id': transportId,
     }),
   }
@@ -138,11 +307,20 @@ async function executeServerAction(
 
   try {
     await hooks?.onRequest?.(request)
+    const body = encodeActionArguments(request.args)
+    if (body instanceof FormData) {
+      request.headers.delete('content-type')
+    } else {
+      request.headers.set('content-type', 'application/json')
+    }
     response = await fetch(actionPath, {
       method: 'POST',
       credentials: 'same-origin',
       headers: request.headers,
-      body: JSON.stringify({ args: request.args }),
+      body:
+        typeof body === 'string'
+          ? `{"args":${body}}`
+          : body,
     })
 
     const payload = await readRpcResponse(response)

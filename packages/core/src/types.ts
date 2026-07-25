@@ -25,6 +25,17 @@ export interface ActionRegistration {
 
 export type ActionRegistry = Record<string, ActionRegistration>
 
+export interface FileStream {
+  readonly name: string
+  readonly type: string
+  readonly stream: ReadableStream<Uint8Array>
+  skip(): Promise<void>
+}
+
+export interface FileStreams extends AsyncIterable<FileStream> {
+  skip(): Promise<void>
+}
+
 export interface ServerActionInfo {
   name: string
 }

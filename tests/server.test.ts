@@ -6,13 +6,25 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { text } from 'node:stream/consumers'
+import fastifyMultipart from '@fastify/multipart'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, test } from 'vitest'
+import {
+  createServerReference,
+  fileStream,
+  fileStreams,
+} from '../packages/core/src/client.js'
 import {
   ActionError,
   createFrameworkApp,
   getActionContext,
 } from '../packages/core/src/server.js'
+import type {
+  ActionHandler,
+  FileStream,
+  FileStreams,
+} from '../packages/core/src/types.js'
 
 type FrameworkApp = Awaited<ReturnType<typeof createFrameworkApp>>
 
@@ -37,7 +49,7 @@ afterEach(async () => {
 async function createActionApp(options: {
   bodyLimit?: number
   configure?: (app: FastifyInstance) => Promise<void> | void
-  handler?: () => Promise<unknown>
+  handler?: ActionHandler
 } = {}): Promise<FrameworkApp> {
   const userApp = Fastify({
     bodyLimit: options.bodyLimit,
@@ -56,6 +68,15 @@ async function createActionApp(options: {
   })
   apps.push(app)
   return app
+}
+
+async function actionUrl(app: FrameworkApp): Promise<string> {
+  await app.listen({ host: '127.0.0.1', port: 0 })
+  const address = app.server.address()
+  if (!address || typeof address === 'string') {
+    throw new Error('测试服务器没有取得端口')
+  }
+  return `http://127.0.0.1:${address.port}/_actions`
 }
 
 describe('Server Action Fastify 请求链路', () => {
@@ -188,6 +209,231 @@ describe('Server Action Fastify 请求链路', () => {
       ok: false,
       error: { code: 'UNAUTHORIZED', message: '请先登录' },
     })
+  })
+
+  test('同时恢复内存文件和按顺序读取流文件', async () => {
+    let received:
+      | {
+          memory: string[]
+          stream: string
+          streams: string[]
+        }
+      | undefined
+    const app = await createActionApp({
+      bodyLimit: 1024 * 1024,
+      handler: (async (
+        memory: File[],
+        stream: FileStream,
+        streams: FileStreams,
+      ) => {
+        const streamed = await text(stream.stream)
+        const values: string[] = []
+        for await (const file of streams) {
+          values.push(await text(file.stream))
+        }
+        received = {
+          memory: await Promise.all(
+            memory.map((file) => file.text()),
+          ),
+          stream: streamed,
+          streams: values,
+        }
+        return received
+      }) as ActionHandler,
+    })
+    const action = createServerReference<
+      (
+        memory: File[],
+        stream: FileStream,
+        streams: FileStreams,
+      ) => Promise<typeof received>
+    >(await actionUrl(app), transportId)
+
+    const result = await action(
+      [
+        new File(['a'], 'a.txt', { type: 'text/plain' }),
+        new File(['b'], 'b.txt', { type: 'text/plain' }),
+      ],
+      fileStream(
+        new File(['c'], 'c.txt', { type: 'text/plain' }),
+      ),
+      fileStreams([
+        new File(['d'], 'd.txt', { type: 'text/plain' }),
+        new File(['e'], 'e.txt', { type: 'text/plain' }),
+      ]),
+    )
+
+    expect(result).toEqual({
+      memory: ['a', 'b'],
+      stream: 'c',
+      streams: ['d', 'e'],
+    })
+    expect(received).toEqual(result)
+  })
+
+  test('鉴权 Hook 拒绝请求时不会解析 multipart', async () => {
+    let called = false
+    const app = await createActionApp({
+      configure(instance) {
+        instance.addHook('onRequest', async (request) => {
+          if (request.serverAction) {
+            throw new ActionError('无权上传', {
+              code: 'FORBIDDEN',
+              status: 403,
+            })
+          }
+        })
+      },
+      handler: async () => {
+        called = true
+      },
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/_actions',
+      headers: {
+        'content-type': 'multipart/form-data; boundary=invalid',
+        'x-action-id': transportId,
+      },
+      payload: '无效的 multipart 内容',
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json()).toMatchObject({
+      ok: false,
+      error: { code: 'FORBIDDEN', message: '无权上传' },
+    })
+    expect(called).toBe(false)
+  })
+
+  test('multipart 文件遵循 Fastify 请求体大小限制', async () => {
+    const app = await createActionApp({ bodyLimit: 256 })
+    const action = createServerReference<
+      (file: File) => Promise<void>
+    >(await actionUrl(app), transportId)
+
+    await expect(
+      action(new File(['x'.repeat(512)], 'large.txt')),
+    ).rejects.toMatchObject({
+      code: 'PAYLOAD_TOO_LARGE',
+      status: 413,
+    })
+  })
+
+  test('复用应用已经注册的 multipart 插件', async () => {
+    const app = await createActionApp({
+      async configure(instance) {
+        await instance.register(fastifyMultipart)
+      },
+      handler: (async (file: File) => file.text()) as ActionHandler,
+    })
+    const action = createServerReference<
+      (file: File) => Promise<string>
+    >(await actionUrl(app), transportId)
+
+    await expect(
+      action(new File(['content'], 'file.txt')),
+    ).resolves.toBe('content')
+  })
+
+  test('FileStream 和 FileStreams 可以跳过并继续后续文件', async () => {
+    const app = await createActionApp({
+      bodyLimit: 1024 * 1024,
+      handler: (async (
+        skipped: FileStream,
+        skippedMany: FileStreams,
+        used: FileStream,
+      ) => {
+        await skipped.skip()
+        await skippedMany.skip()
+        return text(used.stream)
+      }) as ActionHandler,
+    })
+    const action = createServerReference<
+      (
+        skipped: FileStream,
+        skippedMany: FileStreams,
+        used: FileStream,
+      ) => Promise<string>
+    >(await actionUrl(app), transportId)
+
+    await expect(
+      action(
+        fileStream(new File(['skip'], 'skip.txt')),
+        fileStreams([
+          new File(['skip-1'], 'skip-1.txt'),
+          new File(['skip-2'], 'skip-2.txt'),
+        ]),
+        fileStream(new File(['used'], 'used.txt')),
+      ),
+    ).resolves.toBe('used')
+  })
+
+  test('读取后续文件时前一个流未处理会立即报错', async () => {
+    const app = await createActionApp({
+      bodyLimit: 1024 * 1024,
+      handler: (async (
+        _first: FileStream,
+        following: FileStreams,
+      ) => {
+        for await (const file of following) {
+          await text(file.stream)
+        }
+      }) as ActionHandler,
+    })
+    const action = createServerReference<
+      (
+        first: FileStream,
+        following: FileStreams,
+      ) => Promise<void>
+    >(await actionUrl(app), transportId)
+
+    await expect(
+      action(
+        fileStream(new File(['first'], 'first.txt')),
+        fileStreams([
+          new File(['following'], 'following.txt'),
+        ]),
+      ),
+    ).rejects.toMatchObject({
+      code: 'FILE_STREAM_ORDER',
+      status: 500,
+    })
+  })
+
+  test('提前结束 FileStreams 迭代时自动跳过剩余文件', async () => {
+    const app = await createActionApp({
+      bodyLimit: 1024 * 1024,
+      handler: (async (
+        files: FileStreams,
+        following: FileStream,
+      ) => {
+        const values: string[] = []
+        for await (const file of files) {
+          values.push(await text(file.stream))
+          break
+        }
+        values.push(await text(following.stream))
+        return values
+      }) as ActionHandler,
+    })
+    const action = createServerReference<
+      (
+        files: FileStreams,
+        following: FileStream,
+      ) => Promise<string[]>
+    >(await actionUrl(app), transportId)
+
+    await expect(
+      action(
+        fileStreams([
+          new File(['first'], 'first.txt'),
+          new File(['skipped'], 'skipped.txt'),
+        ]),
+        fileStream(new File(['following'], 'following.txt')),
+      ),
+    ).resolves.toEqual(['first', 'following'])
   })
 
   test('保留用户创建的 Fastify 实例和原生路由', async () => {

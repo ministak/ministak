@@ -3,6 +3,8 @@ import { effect, ref, stop } from 'vue'
 import {
   callServerAction,
   createServerReference,
+  fileStream,
+  fileStreams,
   ServerActionError,
   setServerActionHooks,
 } from '../packages/core/src/client.js'
@@ -233,6 +235,71 @@ describe('Server Action 客户端协议', () => {
     expect(JSON.parse(String(init.body))).toEqual({
       args: ['changed'],
     })
+  })
+
+  test('文件参数自动使用 multipart 并保留参数位置', async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, data: true })),
+    )
+    vi.stubGlobal('fetch', fetch)
+    const memory = new File(['memory'], 'memory.txt', {
+      type: 'text/plain',
+      lastModified: 1,
+    })
+    const stream = new File(['stream'], 'stream.txt', {
+      type: 'text/plain',
+      lastModified: 2,
+    })
+    const streams = [
+      new File(['first'], 'first.txt', {
+        type: 'text/plain',
+        lastModified: 3,
+      }),
+      new File(['second'], 'second.txt', {
+        type: 'text/plain',
+        lastModified: 4,
+      }),
+    ]
+    const action = createServerReference<
+      (value: unknown) => Promise<boolean>
+    >('/_actions', 'action')
+
+    const request = action({
+      memory,
+      stream: fileStream(stream),
+      streams: fileStreams(streams),
+    })
+    expect(fetch).not.toHaveBeenCalled()
+    await expect(request).resolves.toBe(true)
+
+    const [, init] = fetch.mock.calls[0] as [string, RequestInit]
+    expect(new Headers(init.headers).has('content-type')).toBe(false)
+    expect(init.body).toBeInstanceOf(FormData)
+    const entries = [...(init.body as FormData).entries()]
+    expect(entries.map(([name]) => name)).toEqual([
+      '__ministak_action',
+      '__ministak_file_0',
+      '__ministak_file_1',
+      '__ministak_file_2',
+      '__ministak_file_3',
+    ])
+    const metadata = JSON.parse(String(entries[0][1]))
+    expect(metadata.args).toEqual([
+      { memory: null, stream: null, streams: null },
+    ])
+    expect(metadata.files).toMatchObject([
+      { kind: 'file', path: [0, 'memory'] },
+      { kind: 'stream', path: [0, 'stream'] },
+      { kind: 'streams', path: [0, 'streams'] },
+    ])
+    expect(
+      entries.slice(1).map(([, value]) => (value as File).name),
+    ).toEqual([
+      'memory.txt',
+      'stream.txt',
+      'first.txt',
+      'second.txt',
+    ])
   })
 
   test('响应 Hook 的返回值替换 Action 结果', async () => {

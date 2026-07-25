@@ -88,7 +88,7 @@ async function add() {
 </template>
 ```
 
-客户端构建时，这些函数会被转换成惰性 RPC 请求；服务端仍执行原函数。参数和返回值通过 JSON 传输。
+客户端构建时，这些函数会被转换成惰性 RPC 请求；服务端仍执行原函数。普通参数和返回值通过 JSON 传输。
 
 直接等待 Action 时，用法和普通异步函数一致：
 
@@ -119,6 +119,52 @@ async function add() {
 ```
 
 多个并发请求绑定同一个 ref 时，它会在全部请求结束后恢复为 `false`。
+
+### 文件参数
+
+直接传入 `File` 或 `File[]` 时，服务端收到完整的内存文件。大文件可以包装成流，服务端按需读取：
+
+```ts
+// src/actions.ts
+'use server'
+
+import type { FileStream, FileStreams } from 'ministak'
+
+export async function upload(
+  avatar: File,
+  documents: File[],
+  video: FileStream,
+  attachments: FileStreams,
+) {
+  console.log(avatar.name, await avatar.text())
+  console.log(documents.map((file) => file.name))
+
+  for await (const chunk of video.stream) {
+    console.log(video.name, chunk.byteLength)
+  }
+
+  for await (const file of attachments) {
+    for await (const chunk of file.stream) {
+      console.log(file.name, chunk.byteLength)
+    }
+  }
+}
+```
+
+```ts
+// 客户端
+import { fileStream, fileStreams } from 'ministak/client'
+import { upload } from './actions'
+
+await upload(
+  avatar,
+  documents,
+  fileStream(video),
+  fileStreams(attachments),
+)
+```
+
+`FileStream` 和 `FileStreams` 不会自动写入磁盘。流文件按参数顺序到达；不需要某个文件时调用 `await file.skip()`，不再需要整个集合时调用 `await files.skip()`，随后才能读取后面的流。
 
 `'use server'` 文件只能导出具名异步函数和 TypeScript 类型，不支持默认导出、重导出、导出变量或同步函数。
 

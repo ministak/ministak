@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { setServerActionHooks } from 'ministak/client'
+import {
+  fileStream,
+  fileStreams,
+  setServerActionHooks,
+} from 'ministak/client'
+import type { FileStream, FileStreams } from 'ministak'
 import { incrementCounter } from '../../examples/basic/src/actions'
 
 setServerActionHooks({
@@ -34,6 +39,18 @@ async function verifyServerActionTypes() {
 }
 
 void verifyServerActionTypes
+
+const browserFile = new File(['content'], 'example.txt')
+const oneFile: FileStream = fileStream(browserFile)
+const manyFiles: FileStreams = fileStreams([browserFile])
+
+async function acceptsStream(_file: FileStream) {}
+
+void acceptsStream(oneFile)
+void manyFiles
+
+// @ts-expect-error 普通 File 不是 FileStream
+void acceptsStream(browserFile)
 </script>
 
 <template>
