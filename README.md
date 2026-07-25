@@ -1,3 +1,3 @@
 # Ministak
 
-使用说明与 npm 包：https://www.npmjs.com/package/ministak
+官方网站与使用教程：https://ministak.github.io/
