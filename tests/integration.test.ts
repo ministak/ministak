@@ -214,8 +214,9 @@ async function readBuiltTransportId(
 async function readClientOutput(
   root: string,
   outDir = path.join(root, 'dist'),
+  assetsDir = 'assets',
 ): Promise<string> {
-  const assetDirectory = path.join(outDir, 'client/assets')
+  const assetDirectory = path.join(outDir, 'client', assetsDir)
   const files = await readdir(assetDirectory)
   const javascript = files.filter((file) => file.endsWith('.js'))
   return (
@@ -727,6 +728,7 @@ createApp(App).mount('#app')
           },
         },
         build: {
+          assetsDir: 'static',
           sourcemap: true,
         },
         plugins: [vue(), {
@@ -765,7 +767,11 @@ createApp(App).mount('#app')
       await readdir(path.join(outputRoot, 'server')),
     ).toContain('index.mjs.map')
 
-    const clientOutput = await readClientOutput(projectRoot, outputRoot)
+    const clientOutput = await readClientOutput(
+      projectRoot,
+      outputRoot,
+      'static',
+    )
     const transportId = await readBuiltTransportId(
       outputRoot,
       incrementActionName,
@@ -784,7 +790,19 @@ createApp(App).mount('#app')
       headers: { accept: 'text/html' },
     })
     expect(nestedPage.status).toBe(200)
+    expect(nestedPage.headers.get('cache-control')).toBe('no-cache')
     expect(await nestedPage.text()).toContain('Ministak 示例')
+    const clientFiles = await readdir(
+      path.join(outputRoot, 'client/static'),
+    )
+    const clientScript = clientFiles.find((file) => file.endsWith('.js'))
+    expect(clientScript).toBeDefined()
+    const clientAsset = await fetch(
+      `${server.url}/app/static/${clientScript}`,
+    )
+    expect(clientAsset.headers.get('cache-control')).toBe(
+      'public, max-age=31536000, immutable',
+    )
     const outsideBase = await fetch(`${server.url}/users/1`, {
       headers: { accept: 'text/html' },
     })
@@ -881,6 +899,41 @@ createApp(App).mount('#app')
 })
 
 describe('开发服务器热更新', () => {
+  test('后端首次启动失败时清理开发产物并允许重新启动', async () => {
+    const projectRoot = path.join(testProjectsRoot, 'failed-dev-start')
+    await mkdir(testProjectsRoot, { recursive: true })
+    await cp(exampleRoot, projectRoot, {
+      recursive: true,
+      filter: (source) =>
+        !source.includes(`${path.sep}node_modules`) &&
+        !source.includes(`${path.sep}dist`) &&
+        !source.includes(`${path.sep}.ministak`),
+    })
+    const serverFile = path.join(projectRoot, 'src/server.ts')
+    const original = await readFile(serverFile, 'utf8')
+    await writeFile(
+      serverFile,
+      `
+        import Fastify from 'fastify'
+        const app = Fastify()
+        throw new Error('测试启动失败')
+        export default app
+      `,
+      'utf8',
+    )
+
+    await expect(
+      createDevServer({ root: projectRoot, port: 0 }),
+    ).rejects.toThrow('Fastify 子进程启动失败')
+    await expect(
+      readdir(path.join(projectRoot, '.ministak/dev')),
+    ).rejects.toMatchObject({ code: 'ENOENT' })
+
+    await writeFile(serverFile, original, 'utf8')
+    const server = await createDevServer({ root: projectRoot, port: 0 })
+    await server.close()
+  })
+
   test('依赖扫描不会进入 Action 的服务端依赖', async () => {
     const projectRoot = path.join(testProjectsRoot, 'action-dependency-scan')
     await mkdir(testProjectsRoot, { recursive: true })

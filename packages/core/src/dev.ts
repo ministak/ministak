@@ -66,6 +66,7 @@ interface ServerBuildResult {
 interface ClientBuildResult {
   basePath: string
   appType: PageAppType
+  assetsDir: string
   publicDir: string
   copyPublicDir: boolean
   sourcemap: boolean
@@ -291,6 +292,7 @@ async function buildClient(options: {
   )
   let basePath = '/'
   let appType: PageAppType = 'spa'
+  let assetsDir = 'assets'
   let publicDir = path.join(options.root, 'public')
   let copyPublicDir = true
   let sourcemap = false
@@ -299,6 +301,7 @@ async function buildClient(options: {
     configResolved(config) {
       basePath = basePathFromResolvedViteBase(config.base)
       appType = resolvePageAppType(config.appType)
+      assetsDir = config.build.assetsDir
       publicDir = config.publicDir
       copyPublicDir = config.build.copyPublicDir
       sourcemap = Boolean(config.build.sourcemap)
@@ -324,6 +327,7 @@ async function buildClient(options: {
   return {
     basePath,
     appType,
+    assetsDir,
     publicDir,
     copyPublicDir,
     sourcemap,
@@ -340,6 +344,7 @@ async function buildServer(options: {
   outDir: string
   development: boolean
   appType: PageAppType
+  clientAssetsDir?: string
   command: ConfigEnv['command']
   mode: EnvironmentMode
   write?: boolean
@@ -359,6 +364,7 @@ async function buildServer(options: {
     serverEntry: options.serverEntry,
     serverOutputDirectory: options.outDir,
     appType: options.appType,
+    clientAssetsDir: options.clientAssetsDir,
   })
   const plugins = await createProjectPlugins(
     loaded.config,
@@ -441,6 +447,7 @@ async function buildProductionApplication(
     outDir: path.join(frameworkConfig.outDir, 'server'),
     development: false,
     appType: client.appType,
+    clientAssetsDir: client.assetsDir,
     command: 'build',
     mode,
     write,
@@ -850,18 +857,36 @@ async function startBackend(
   })
 
   return new Promise((resolve, reject) => {
+    let timeoutError: Error | undefined
+    let forceTimeout: NodeJS.Timeout | undefined
     const timeout = setTimeout(() => {
+      timeoutError = new Error('Fastify 子进程启动超时')
       child.kill()
-      reject(new Error('Fastify 子进程启动超时'))
+      forceTimeout = setTimeout(() => child.kill('SIGKILL'), 5_000)
     }, 15_000)
 
-    const onExit = (code: number | null) => {
+    const cleanup = () => {
       clearTimeout(timeout)
-      reject(new Error(`Fastify 子进程启动失败，退出码：${code}`))
+      clearTimeout(forceTimeout)
+      child.off('error', onError)
+      child.off('exit', onExit)
+      child.off('message', onMessage)
     }
 
-    child.once('exit', onExit)
-    child.on('message', (message) => {
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+
+    const onExit = (code: number | null) => {
+      cleanup()
+      reject(
+        timeoutError ??
+          new Error(`Fastify 子进程启动失败，退出码：${code}`),
+      )
+    }
+
+    const onMessage = (message: unknown) => {
       if (
         !message ||
         typeof message !== 'object' ||
@@ -873,10 +898,13 @@ async function startBackend(
       }
 
       const address = message.address as AddressInfo
-      clearTimeout(timeout)
-      child.off('exit', onExit)
+      cleanup()
       resolve({ child, port: address.port, outputDirectory })
-    })
+    }
+
+    child.once('error', onError)
+    child.once('exit', onExit)
+    child.on('message', onMessage)
   })
 }
 
@@ -1116,19 +1144,33 @@ export async function createDevServer(
   const launchBackend = async (): Promise<void> => {
     const nextGeneration = generation + 1
     const outputDirectory = path.join(devRoot, `backend-${nextGeneration}`)
-    const built = await buildServer({
-      root,
-      transportKey,
-      actionPath: frameworkConfig.actionPath,
-      basePath: '/',
-      serverEntry: frameworkConfig.serverEntry,
-      outDir: outputDirectory,
-      development: true,
-      appType,
-      command: 'serve',
-      mode,
-    })
-    const nextBackend = await startBackend(built.entry, outputDirectory, root)
+    let built: ServerBuildResult
+    let nextBackend: BackendProcess
+    try {
+      built = await buildServer({
+        root,
+        transportKey,
+        actionPath: frameworkConfig.actionPath,
+        basePath: '/',
+        serverEntry: frameworkConfig.serverEntry,
+        outDir: outputDirectory,
+        development: true,
+        appType,
+        command: 'serve',
+        mode,
+      })
+      nextBackend = await startBackend(built.entry, outputDirectory, root)
+    } catch (error) {
+      try {
+        await rm(outputDirectory, { recursive: true, force: true })
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'Fastify 子进程启动失败且无法清理构建产物',
+        )
+      }
+      throw error
+    }
     const previous = backend
 
     backend = nextBackend
@@ -1198,10 +1240,6 @@ export async function createDevServer(
       },
     },
   })
-  appType = resolvePageAppType(vite.config.appType)
-  await rm(devRoot, { recursive: true, force: true })
-  await launchBackend()
-  await vite.listen()
 
   const watchServerFiles = () => {
     vite.watcher.add([
@@ -1210,7 +1248,46 @@ export async function createDevServer(
       ...configDependencies,
     ])
   }
-  watchServerFiles()
+
+  let address: AddressInfo
+  try {
+    appType = resolvePageAppType(vite.config.appType)
+    await rm(devRoot, { recursive: true, force: true })
+    await launchBackend()
+    await vite.listen()
+    watchServerFiles()
+    const listeningAddress = vite.httpServer?.address() as AddressInfo | null
+    if (!listeningAddress) {
+      throw new Error('Vite 开发服务器没有监听地址')
+    }
+    address = listeningAddress
+  } catch (error) {
+    const cleanupErrors: unknown[] = []
+    if (backend) {
+      try {
+        await stopBackend(backend)
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError)
+      }
+    }
+    try {
+      await vite.close()
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError)
+    }
+    try {
+      await rm(devRoot, { recursive: true, force: true })
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError)
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        '开发服务器启动失败且无法完整清理',
+      )
+    }
+    throw error
+  }
 
   let reloadTimer: NodeJS.Timeout | undefined
   let reloadQueue = Promise.resolve()
@@ -1310,10 +1387,6 @@ export async function createDevServer(
     })
   })
 
-  const address = vite.httpServer?.address() as AddressInfo | null
-  if (!address) {
-    throw new Error('Vite 开发服务器没有监听地址')
-  }
   const urlHost = typeof publicHost === 'string' ? publicHost : '127.0.0.1'
   const url = `http://${urlHost}:${address.port}`
 

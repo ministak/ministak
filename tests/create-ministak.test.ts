@@ -145,6 +145,20 @@ afterEach(async () => {
 })
 
 describe('创建项目', () => {
+  test('核心包复用用户项目提供的 Fastify', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(coreRoot, 'package.json'), 'utf8'),
+    ) as {
+      dependencies?: Record<string, string>
+      peerDependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+    }
+
+    expect(packageJson.dependencies?.fastify).toBeUndefined()
+    expect(packageJson.peerDependencies?.fastify).toBe('^5.10.0')
+    expect(packageJson.devDependencies?.fastify).toBe('^5.10.0')
+  })
+
   test('npm 包使用压缩代码且不包含源码映射', async () => {
     await expectMinifiedPackage(path.join(coreRoot, 'dist'), [
       'encodeActionArguments',

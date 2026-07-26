@@ -79,11 +79,29 @@ function isTypeOnlyExport(node: ExportNamedDeclaration): boolean {
 export function parseServerActionExports(code: string, file: string): string[] {
   const program = parseModule(code, file)
 
-  const isServerActionModule = program.directives.some(
+  const serverDirectiveIndex = program.directives.findIndex(
     (directive) => directive.value.value === 'use server',
   )
-  if (!isServerActionModule) {
+  if (serverDirectiveIndex < 0) {
+    const misplacedDirective = (program.body as Statement[]).some(
+      (statement) =>
+        statement.type === 'ExpressionStatement' &&
+        statement.expression.type === 'StringLiteral' &&
+        statement.expression.value === 'use server',
+    )
+    if (misplacedDirective) {
+      throw new ActionCompileError(
+        "'use server' 必须是文件的第一条语句",
+        file,
+      )
+    }
     return []
+  }
+  if (serverDirectiveIndex !== 0) {
+    throw new ActionCompileError(
+      "'use server' 必须是文件的第一条语句",
+      file,
+    )
   }
 
   const exports: string[] = []

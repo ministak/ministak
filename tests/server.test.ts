@@ -1029,6 +1029,12 @@ describe('生产 SPA 静态服务', () => {
     const asset = await app.inject({ method: 'GET', url: '/app/assets/app.js' })
     expect(asset.statusCode).toBe(200)
     expect(asset.body).toBe('export {}')
+    expect(asset.headers['cache-control']).toBe(
+      'public, max-age=31536000, immutable',
+    )
+
+    const index = await app.inject({ method: 'GET', url: '/app/' })
+    expect(index.headers['cache-control']).toBe('no-cache')
 
     const nested = await app.inject({
       method: 'GET',
@@ -1037,6 +1043,7 @@ describe('生产 SPA 静态服务', () => {
     })
     expect(nested.statusCode).toBe(200)
     expect(nested.body).toContain('SPA INDEX')
+    expect(nested.headers['cache-control']).toBe('no-cache')
 
     const outside = await app.inject({
       method: 'GET',

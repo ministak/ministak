@@ -29,6 +29,7 @@ afterEach(async () => {
 describe('Server Action 编译扫描', () => {
   test('只收集 use server 文件中的具名异步函数', () => {
     const code = `
+      // Action 文件
       'use server'
       export interface Input { name: string }
       export type Result = { ok: true }
@@ -38,6 +39,27 @@ describe('Server Action 编译扫描', () => {
     `
 
     expect(parseServerActionExports(code, 'user.ts')).toEqual(['createUser'])
+  })
+
+  test('注释和普通字符串中的 use server 不会被识别为 Action', () => {
+    expect(
+      parseServerActionExports(
+        `
+          // 文档说明：'use server' 必须位于文件开头
+          export const message = 'use server'
+        `,
+        'ordinary.ts',
+      ),
+    ).toEqual([])
+  })
+
+  test.each([
+    ["'use strict'\n'use server'\nexport async function run() {}", 'first.ts'],
+    ["import './setup'\n'use server'\nexport async function run() {}", 'second.ts'],
+  ])('拒绝不在第一条语句中的 use server', (code, file) => {
+    expect(() => parseServerActionExports(code, file)).toThrow(
+      "'use server' 必须是文件的第一条语句",
+    )
   })
 
   test.each([
@@ -182,6 +204,73 @@ export async function save<T extends Allowed>(input: Input<T>) {
     expect(createActionTransportId('first', name)).not.toBe(
       createActionTransportId('second', name),
     )
+  })
+
+  test('客户端转换不会误判注释中的 use server', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ministak-transform-'))
+    temporaryDirectories.push(root)
+    await mkdir(path.join(root, 'src'), { recursive: true })
+    const plugin = createMinistakPlugin({
+      root,
+      target: 'client',
+      transportKey,
+      actionPath: '/_actions',
+    })
+    const transform = plugin.transform
+    if (typeof transform !== 'function') {
+      throw new Error('客户端插件没有注册 transform 钩子')
+    }
+
+    const result = await transform.call(
+      {
+        error(message: unknown): never {
+          throw new Error(String(message))
+        },
+      } as never,
+      "// 文档说明：'use server' 必须位于文件开头\nexport const value = 1\n",
+      path.join(root, 'src/ordinary.ts'),
+    )
+
+    expect(result).toBeNull()
+  })
+
+  test('非脚本文件热更新不会重新扫描 Action', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ministak-hmr-'))
+    temporaryDirectories.push(root)
+    await mkdir(path.join(root, 'src'), { recursive: true })
+    const actionFile = path.join(root, 'src/action.ts')
+    await writeFile(
+      actionFile,
+      "'use server'\nexport async function run() {}\n",
+      'utf8',
+    )
+    const plugin = createMinistakPlugin({
+      root,
+      target: 'client',
+      transportKey,
+      actionPath: '/_actions',
+      development: true,
+    })
+    await plugin.ministak.refreshManifest()
+    await writeFile(actionFile, "'use server'\nexport const =", 'utf8')
+    const hotUpdate = plugin.hotUpdate
+    if (typeof hotUpdate !== 'function') {
+      throw new Error('客户端插件没有注册 Vite 8 hotUpdate 钩子')
+    }
+
+    const result = await hotUpdate.call(
+      { environment: { name: 'client', hot: { send: vi.fn() } } } as never,
+      {
+        type: 'update',
+        file: path.join(root, 'src/App.vue'),
+        timestamp: Date.now(),
+        modules: [],
+        read: () => '',
+        server: {},
+      } as never,
+    )
+
+    expect(result).toBeUndefined()
   })
 
   test.each(['create', 'update', 'delete'] as const)(

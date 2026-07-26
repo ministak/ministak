@@ -27,6 +27,9 @@ import {
 export { loadServerEnvironment } from './env.js'
 
 const actionStorage = new AsyncLocalStorage<ActionContext>()
+const IMMUTABLE_CACHE_CONTROL =
+  'public, max-age=31536000, immutable'
+const HTML_CACHE_CONTROL = 'no-cache'
 
 export interface ActionErrorOptions {
   code?: string
@@ -263,6 +266,7 @@ export interface CreateFrameworkAppOptions {
   actionRegistry: ActionRegistry
   development: boolean
   clientRoot?: string
+  assetsDir?: string
   basePath?: string
   appType?: PageAppType
 }
@@ -325,9 +329,26 @@ export async function createFrameworkApp(
       path.join(options.clientRoot, 'index.html'),
       'utf8',
     )
+    const assetsRoot = path.resolve(
+      options.clientRoot,
+      options.assetsDir ?? 'assets',
+    )
     await app.register(fastifyStatic, {
       root: options.clientRoot,
       prefix: basePath,
+      cacheControl: false,
+      setHeaders(response, file) {
+        const relative = path.relative(assetsRoot, file)
+        const immutable =
+          path.extname(file) !== '.html' &&
+          relative !== '..' &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative)
+        response.setHeader(
+          'cache-control',
+          immutable ? IMMUTABLE_CACHE_CONTROL : HTML_CACHE_CONTROL,
+        )
+      },
     })
   }
   if ((options.appType ?? 'spa') === 'spa') {
@@ -343,7 +364,10 @@ export async function createFrameworkApp(
             basePath,
           )
         ) {
-          return reply.type('text/html; charset=utf-8').send(indexHtml)
+          return reply
+            .header('cache-control', HTML_CACHE_CONTROL)
+            .type('text/html; charset=utf-8')
+            .send(indexHtml)
         }
         return reply.code(404).send({ error: 'Not Found' })
       })

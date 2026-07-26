@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 import {
   createActionTransportId,
+  parseServerActionExports,
   scanServerActions,
   writeActionTypeDeclarations,
 } from './action-scanner.js'
@@ -115,6 +116,7 @@ function createServerEntryModule(options: {
   basePath: string
   development: boolean
   appType: PageAppType
+  clientAssetsDir?: string
 }): string {
   const serverEntryImport = rootImport(options.root, options.serverEntry)
   const applicationRoot = path
@@ -154,6 +156,9 @@ export const app = await createFrameworkApp({
   actionRegistry,
   development,
   clientRoot,
+  assetsDir: development
+    ? undefined
+    : ${JSON.stringify(options.clientAssetsDir ?? 'assets')},
   appType: ${JSON.stringify(options.appType)},
 })
 
@@ -202,6 +207,7 @@ interface CommonMinistakPluginOptions {
   development?: boolean
   serverEntry?: string
   appType?: PageAppType
+  clientAssetsDir?: string
 }
 
 export type MinistakPluginOptions =
@@ -359,6 +365,7 @@ export function createMinistakPlugin(
           basePath: options.basePath ?? '/',
           development: options.development ?? false,
           appType: options.appType ?? 'spa',
+          clientAssetsDir: options.clientAssetsDir,
         })
       }
 
@@ -383,6 +390,9 @@ export function createMinistakPlugin(
         return null
       }
 
+      if (parseServerActionExports(code, file).length === 0) {
+        return null
+      }
       if (!isFileInsideRoot(sourceRoot, file)) {
         this.error("'use server' 文件必须位于 src 目录")
       }
@@ -393,6 +403,7 @@ export function createMinistakPlugin(
       if (
         options.target !== 'client' ||
         this.environment.name !== 'client' ||
+        !ACTION_MODULE_PATTERN.test(context.file) ||
         !isFileInsideRoot(sourceRoot, context.file)
       ) {
         return
