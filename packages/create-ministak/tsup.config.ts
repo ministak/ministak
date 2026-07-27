@@ -5,7 +5,7 @@ export default defineConfig({
     cli: 'src/cli.ts',
   },
   format: ['esm'],
-  target: 'node24',
+  target: 'node22',
   clean: true,
   splitting: false,
   minify: true,

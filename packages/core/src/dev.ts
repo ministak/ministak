@@ -133,9 +133,9 @@ function validateUserViteConfig(
       '服务端构建入口由 Ministak 管理，build.ssr 只能省略或设为 true',
     )
   }
-  if (build?.target !== undefined && build.target !== 'node24') {
+  if (build?.target !== undefined && build.target !== 'node22') {
     throw new Error(
-      '服务端构建目标由 Ministak 管理，build.target 只能省略或设为 "node24"',
+      '服务端构建目标由 Ministak 管理，build.target 只能省略或设为 "node22"',
     )
   }
   if (build?.rollupOptions?.input !== undefined) {
@@ -387,7 +387,7 @@ async function buildServer(options: {
     build: {
       ...loaded.config.build,
       ssr: true,
-      target: 'node24',
+      target: 'node22',
       outDir: options.outDir,
       emptyOutDir: true,
       sourcemap:

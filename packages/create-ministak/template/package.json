@@ -12,7 +12,7 @@
     "typecheck": "ministak types && vue-tsc --noEmit"
   },
   "dependencies": {
-    "ministak": "^0.2.0",
+    "ministak": "^0.2.2",
     "fastify": "^5.10.0",
     "server-only": "0.0.1",
     "vue": "^3.5.40"
