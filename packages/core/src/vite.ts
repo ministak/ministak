@@ -141,6 +141,7 @@ const clientRoot = development
   ? undefined
   : path.resolve(currentDirectory, '../client')
 
+process.env.NODE_ENV = development ? 'development' : 'production'
 loadServerEnvironment(
   applicationRoot,
   development ? 'development' : 'production',

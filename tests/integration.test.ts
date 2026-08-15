@@ -104,7 +104,10 @@ async function startBuiltServer(
   return { child, url: `http://127.0.0.1:${address.port}` }
 }
 
-async function startProductionCommand(root: string): Promise<{
+async function startProductionCommand(
+  root: string,
+  environment: NodeJS.ProcessEnv = {},
+): Promise<{
   url: string
   output: string
 }> {
@@ -115,6 +118,7 @@ async function startProductionCommand(root: string): Promise<{
       cwd: repositoryRoot,
       env: {
         ...process.env,
+        ...environment,
         MINISTAK_PORT: '0',
         MINISTAK_HOST: '127.0.0.1',
       },
@@ -595,15 +599,38 @@ console.log(inspectUpload)
       'MINISTAK_TEST_PRIVATE=production-local-private\n',
       'utf8',
     )
+    const modeConfig = `export default ({ command }: { command: string }) => {
+  const expected = command === 'serve' ? 'development' : 'production'
+  if (process.env.NODE_ENV !== expected) {
+    throw new Error(\`NODE_ENV 应为 \${expected}，实际为 \${process.env.NODE_ENV}\`)
+  }
+  return {}
+}
+`
+    await writeFile(
+      path.join(projectRoot, 'ministak.config.ts'),
+      modeConfig,
+      'utf8',
+    )
+    await writeFile(
+      path.join(projectRoot, 'vite.config.ts'),
+      modeConfig,
+      'utf8',
+    )
     await writeFile(
       path.join(projectRoot, 'src/server.ts'),
       `import Fastify from 'fastify'
 
 const environment = process.env.MINISTAK_TEST_PRIVATE
 const missing = process.env.MINISTAK_TEST_MISSING
+const nodeEnvironment = process.env.NODE_ENV
 const app = Fastify()
 
-app.get('/environment', async () => ({ environment, missing }))
+app.get('/environment', async () => ({
+  environment,
+  missing,
+  nodeEnvironment,
+}))
 
 export default app
 `,
@@ -657,29 +684,37 @@ createApp(App).mount('#app')
     expect(serverCode).not.toContain('production-local-private')
     expect(serverCode).not.toMatch(/from\s+['"]vite['"]/)
 
-    const production = await startBuiltServer(
+    const production = await startProductionCommand(
       projectRoot,
-      path.join(projectRoot, 'dist'),
-      {},
-      repositoryRoot,
+      { NODE_ENV: 'wrong' },
     )
     expect(
       await fetch(`${production.url}/environment`).then((response) =>
         response.json(),
       ),
-    ).toEqual({ environment: 'production-local-private' })
+    ).toEqual({
+      environment: 'production-local-private',
+      nodeEnvironment: 'production',
+    })
 
     const overridden = await startBuiltServer(
       projectRoot,
       path.join(projectRoot, 'dist'),
-      { MINISTAK_TEST_PRIVATE: 'system-private' },
+      {
+        MINISTAK_TEST_PRIVATE: 'system-private',
+        NODE_ENV: 'wrong',
+      },
     )
     expect(
       await fetch(`${overridden.url}/environment`).then((response) =>
         response.json(),
       ),
-    ).toEqual({ environment: 'system-private' })
+    ).toEqual({
+      environment: 'system-private',
+      nodeEnvironment: 'production',
+    })
 
+    process.env.NODE_ENV = 'wrong'
     const development = await createDevServer({
       root: projectRoot,
       port: 0,
@@ -689,7 +724,10 @@ createApp(App).mount('#app')
         await fetch(`${development.url}/environment`).then(
           (response) => response.json(),
         ),
-      ).toEqual({ environment: 'development-local-private' })
+      ).toEqual({
+        environment: 'development-local-private',
+        nodeEnvironment: 'development',
+      })
     } finally {
       await development.close()
     }

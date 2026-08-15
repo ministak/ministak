@@ -219,6 +219,10 @@ function configEnvironment(
   return { command, mode, isSsrBuild, isPreview: false }
 }
 
+function setNodeEnvironment(mode: EnvironmentMode): void {
+  process.env.NODE_ENV = mode
+}
+
 function mergeNoExternal(
   value: NonNullable<UserConfig['ssr']>['noExternal'],
 ): NonNullable<UserConfig['ssr']>['noExternal'] {
@@ -425,6 +429,7 @@ async function buildProductionApplication(
 ) {
   const root = path.resolve(options.root)
   const mode = 'production'
+  setNodeEnvironment(mode)
   const frameworkConfig = await loadMinistakConfig(
     root,
     configEnvironment('build', mode, false),
@@ -1116,6 +1121,7 @@ export async function createDevServer(
 ): Promise<MinistakDevServer> {
   const root = path.resolve(options.root)
   const mode = 'development'
+  setNodeEnvironment(mode)
   const frameworkConfig = await loadMinistakConfig(
     root,
     configEnvironment('serve', mode, false),
@@ -1438,6 +1444,7 @@ export async function createDevServer(
 
 export async function startProduction(root: string): Promise<void> {
   const applicationRoot = path.resolve(root)
+  setNodeEnvironment('production')
   process.chdir(applicationRoot)
   const config = await loadMinistakConfig(
     applicationRoot,
