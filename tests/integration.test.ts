@@ -104,7 +104,10 @@ async function startBuiltServer(
   return { child, url: `http://127.0.0.1:${address.port}` }
 }
 
-async function startProductionCommand(root: string): Promise<string> {
+async function startProductionCommand(root: string): Promise<{
+  url: string
+  output: string
+}> {
   const child = spawn(
     process.execPath,
     [path.join(repositoryRoot, 'packages/core/dist/cli.js'), 'start', root],
@@ -120,7 +123,7 @@ async function startProductionCommand(root: string): Promise<string> {
   )
   children.push(child)
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<{ url: string; output: string }>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('生产服务器启动超时'))
     }, 10_000)
@@ -140,7 +143,7 @@ async function startProductionCommand(root: string): Promise<string> {
       )?.[1]
       if (url) {
         clearTimeout(timer)
-        resolve(url)
+        resolve({ url, output })
       }
     })
   })
@@ -229,10 +232,11 @@ async function readClientOutput(
 describe('生产构建和 HTTP 调用', () => {
   test('生产启动命令输出可访问地址', async () => {
     await buildApplication({ root: exampleRoot })
-    const url = await startProductionCommand(exampleRoot)
+    const { url, output } = await startProductionCommand(exampleRoot)
 
     const response = await fetch(url)
     expect(response.status).toBe(200)
+    expect(output).toContain('未找到可加载的环境变量文件（production）')
   })
 
   test('构建产物隔离并能执行 Server Action', async () => {

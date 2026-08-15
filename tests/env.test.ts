@@ -4,15 +4,18 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import path from 'node:path'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   environmentFileNames,
+  findEnvironmentFiles,
+  printLoadedEnvironmentFiles,
   resolveEnvironment,
 } from '../packages/core/src/env.js'
 
 const testRoot = path.resolve('.test-environment')
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await rm(testRoot, { recursive: true, force: true })
 })
 
@@ -80,5 +83,35 @@ describe('环境变量', () => {
         '系统环境变量',
       ],
     })
+    expect(environment.files).toEqual([
+      '.env',
+      '.env.local',
+      '.env.production',
+      '.env.production.local',
+    ])
+  })
+
+  test('打印实际加载的环境变量文件', async () => {
+    await mkdir(testRoot, { recursive: true })
+    await writeFile(path.join(testRoot, '.env'), 'BASE=base\n', 'utf8')
+    await writeFile(
+      path.join(testRoot, '.env.development.local'),
+      'LOCAL=local\n',
+      'utf8',
+    )
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const files = findEnvironmentFiles(testRoot, 'development')
+
+    printLoadedEnvironmentFiles('development', files)
+
+    expect(files).toEqual(['.env', '.env.development.local'])
+    expect(log).toHaveBeenCalledWith(
+      '已加载环境变量文件（development）：.env → .env.development.local',
+    )
+
+    printLoadedEnvironmentFiles('production', [])
+    expect(log).toHaveBeenLastCalledWith(
+      '未找到可加载的环境变量文件（production）',
+    )
   })
 })

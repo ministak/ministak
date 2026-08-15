@@ -11,6 +11,10 @@ import {
   startProduction,
   type MinistakDevServer,
 } from './dev.js'
+import {
+  findEnvironmentFiles,
+  printLoadedEnvironmentFiles,
+} from './env.js'
 
 const [, , command = 'dev', rootArgument = '.'] = process.argv
 const root = path.resolve(process.cwd(), rootArgument)
@@ -23,11 +27,20 @@ switch (command) {
   }
   case 'build': {
     const result = await buildApplication({ root })
+    printLoadedEnvironmentFiles(
+      'production',
+      findEnvironmentFiles(root, 'production'),
+    )
     console.log(`构建完成：${result.manifest.actions.length} 个 Server Action`)
     break
   }
   case 'inspect': {
-    console.log(await inspectApplication({ root }))
+    const report = await inspectApplication({ root })
+    printLoadedEnvironmentFiles(
+      'production',
+      findEnvironmentFiles(root, 'production'),
+    )
+    console.log(report)
     break
   }
   case 'dev': {

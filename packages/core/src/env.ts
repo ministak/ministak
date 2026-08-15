@@ -13,6 +13,7 @@ export interface EnvironmentVariable {
 export interface ResolvedEnvironment {
   values: NodeJS.ProcessEnv
   variables: Map<string, EnvironmentVariable>
+  files: string[]
 }
 
 export function environmentFileNames(
@@ -26,6 +27,28 @@ export function environmentFileNames(
   ]
 }
 
+export function findEnvironmentFiles(
+  root: string,
+  mode: EnvironmentMode,
+): string[] {
+  return environmentFileNames(mode).filter((name) =>
+    existsSync(path.join(root, name)),
+  )
+}
+
+export function printLoadedEnvironmentFiles(
+  mode: EnvironmentMode,
+  files: string[],
+): void {
+  if (files.length === 0) {
+    console.log(`未找到可加载的环境变量文件（${mode}）`)
+    return
+  }
+  console.log(
+    `已加载环境变量文件（${mode}）：${files.join(' → ')}`,
+  )
+}
+
 export function resolveEnvironment(
   root: string,
   mode: EnvironmentMode,
@@ -33,13 +56,10 @@ export function resolveEnvironment(
 ): ResolvedEnvironment {
   const values: NodeJS.ProcessEnv = {}
   const variables = new Map<string, EnvironmentVariable>()
+  const files = findEnvironmentFiles(root, mode)
 
-  for (const name of environmentFileNames(mode)) {
+  for (const name of files) {
     const file = path.join(root, name)
-    if (!existsSync(file)) {
-      continue
-    }
-
     const parsed = parseEnv(readFileSync(file, 'utf8'))
     for (const [variableName, value] of Object.entries(parsed)) {
       if (value === undefined) {
@@ -68,12 +88,14 @@ export function resolveEnvironment(
     })
   }
 
-  return { values, variables }
+  return { values, variables, files }
 }
 
 export function loadServerEnvironment(
   root: string,
   mode: EnvironmentMode,
 ): void {
-  Object.assign(process.env, resolveEnvironment(root, mode).values)
+  const environment = resolveEnvironment(root, mode)
+  Object.assign(process.env, environment.values)
+  printLoadedEnvironmentFiles(mode, environment.files)
 }
