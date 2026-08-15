@@ -15,4 +15,8 @@ pnpm dev
 ```
 
 - 官方教程：https://ministak.github.io/
-- npm：https://www.npmjs.com/package/ministak
+- npm：https://www.npmjs.com/package/create-ministak
+
+## 许可证
+
+[MIT](LICENSE)

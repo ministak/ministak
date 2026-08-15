@@ -8,6 +8,6 @@ export default defineConfig({
   target: 'node22',
   clean: true,
   splitting: false,
-  minify: true,
+  minify: false,
   sourcemap: false,
 })

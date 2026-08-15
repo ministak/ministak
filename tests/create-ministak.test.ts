@@ -19,7 +19,7 @@ const creatorRoot = path.join(repositoryRoot, 'packages/create-ministak')
 const temporaryDirectories: string[] = []
 const children: ChildProcess[] = []
 
-async function expectMinifiedPackage(
+async function expectReadablePackage(
   directory: string,
   internalNames: string[],
 ): Promise<void> {
@@ -35,7 +35,7 @@ async function expectMinifiedPackage(
     output += code
   }
   for (const name of internalNames) {
-    expect(output).not.toContain(name)
+    expect(output).toContain(name)
   }
 }
 
@@ -159,14 +159,14 @@ describe('创建项目', () => {
     expect(packageJson.devDependencies?.fastify).toBe('^5.10.0')
   })
 
-  test('npm 包使用压缩代码且不包含源码映射', async () => {
-    await expectMinifiedPackage(path.join(coreRoot, 'dist'), [
+  test('npm 包使用可读代码且不包含源码映射', async () => {
+    await expectReadablePackage(path.join(coreRoot, 'dist'), [
       'encodeActionArguments',
       'readRpcResponse',
       'registerActionRoute',
       'createServerEntryModule',
     ])
-    await expectMinifiedPackage(path.join(creatorRoot, 'dist'), [
+    await expectReadablePackage(path.join(creatorRoot, 'dist'), [
       'validateProjectName',
       'copyTemplate',
     ])

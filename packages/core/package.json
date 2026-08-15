@@ -1,9 +1,18 @@
 {
   "name": "ministak",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "轻量的 Vue 全栈框架：客户端 SPA、Fastify 服务端与 Server Action",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "author": "Ministak",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ministak/ministak.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://ministak.github.io/",
+  "bugs": {
+    "url": "https://github.com/ministak/ministak/issues"
+  },
   "type": "module",
   "files": [
     "dist",
